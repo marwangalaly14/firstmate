@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--leader <task-id>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--leader <task-id>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -45,6 +45,15 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --leader <task-id> records the branch leader that briefs, steers and
+#   supervises this crewmate: leader=<task-id> in state/<id>.meta, echoed on the
+#   success line. bin/fm-lead-lib.sh owns who may lead (a live ship or scout
+#   task of this home that is not itself led) and the four-crewmate ceiling;
+#   the spawn refuses before any endpoint, worktree, or record exists when the
+#   leader fails that test or already leads four recorded crewmates, naming
+#   them, and holds state/.lead-<leader>.lock from that count until the record
+#   is published. Ship and scout spawns only; a relaunch keeps the recorded
+#   leader, and bin/fm-lead.sh crew lists a leader's crewmates.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -217,7 +226,7 @@
 # items), on a config/backlog-backend=manual home, and in a home that keeps no
 # data/backlog.md. An automatic-backend home with a backlog but no compatible
 # tasks-axi refuses before creating any lifecycle state.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path> [leader=<task-id>]
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
@@ -307,6 +316,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-lead-lib.sh
+. "$SCRIPT_DIR/fm-lead-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -338,6 +349,7 @@ BACKEND_ARG=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
+LEADER_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -345,6 +357,7 @@ BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
+LEADER_SET=0
 RELAUNCH=0
 POS=()
 want_value=
@@ -361,6 +374,7 @@ for a in "$@"; do
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
+      leader) LEADER_ARG=$a; LEADER_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -384,6 +398,8 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
+    --leader) want_value=leader ;;
+    --leader=*) LEADER_ARG=${a#--leader=}; LEADER_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -395,6 +411,7 @@ done
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
+[ "$LEADER_SET" -eq 0 ] || [ -n "$LEADER_ARG" ] || { echo "error: --leader requires a non-empty value" >&2; exit 1; }
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -412,6 +429,13 @@ case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
+# The leader chain (bin/fm-lead-lib.sh) is a fresh ship or scout spawn's axis:
+# a relaunch keeps whatever leader= its record carries, and a secondmate leads
+# its own home's crewmates rather than being led here.
+if [ "$LEADER_SET" -eq 1 ]; then
+  [ "$RELAUNCH" -eq 0 ] || { echo "error: --relaunch keeps the task's recorded leader; --leader cannot override it" >&2; exit 1; }
+  [ "$KIND" != secondmate ] || { echo "error: --leader applies only to ship and scout spawns; a secondmate leads its own home's crewmates" >&2; exit 1; }
+fi
 
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
 # so every axis this block resolves for a fresh spawn instead comes from that
@@ -751,6 +775,9 @@ SPAWN_CONTROL_PARENT=0
 SPAWN_META_TMP=
 SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
+SPAWN_LEAD_LOCK=
+SPAWN_LEAD_LOCK_HELD=0
+SPAWN_LEADER_SUFFIX=
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
 SPAWN_TASK_SET_LOCK=
@@ -863,6 +890,7 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            [ -z "${LEADER_ARG:-}" ] || echo "leader=$LEADER_ARG"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -885,6 +913,10 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  if [ "$SPAWN_LEAD_LOCK_HELD" = 1 ]; then
+    SPAWN_LEAD_LOCK_HELD=0
+    fm_lock_release "$SPAWN_LEAD_LOCK" || true
   fi
   if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_SET_LOCK_HELD=0
@@ -2170,6 +2202,19 @@ else
   fi
 fi
 
+# Leader chain preflight (bin/fm-lead-lib.sh). The leader must be a live task of
+# this home leading fewer than FM_LEAD_MAX_CREW recorded crewmates, proved here
+# before any endpoint, worktree, or record exists. The per-leader lock is held
+# from this count until the record below is published, so two spawns under one
+# leader cannot both count three and both take the fourth slot.
+if [ -n "$LEADER_ARG" ]; then
+  SPAWN_LEAD_LOCK=$(fm_lead_lock_path "$STATE" "$LEADER_ARG")
+  fm_lock_acquire_wait "$SPAWN_LEAD_LOCK"
+  SPAWN_LEAD_LOCK_HELD=1
+  fm_lead_check_chain "$STATE" "$LEADER_ARG" "$ID" || exit 1
+  SPAWN_LEADER_SUFFIX=" leader=$LEADER_ARG"
+fi
+
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
   SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
   fm_lock_acquire_wait "$SPAWN_META_LOCK"
@@ -3056,6 +3101,9 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # leader= is written only for a --leader spawn; a relaunch keeps the recorded
+  # line through preserve_relaunch_meta because leader is not an owned key.
+  [ -z "$LEADER_ARG" ] || echo "leader=$LEADER_ARG"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -3102,6 +3150,11 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   fi
   SPAWN_META_TMP=
+fi
+# The leader= line is published; the next spawn under this leader may count.
+if [ "$SPAWN_LEAD_LOCK_HELD" = 1 ]; then
+  SPAWN_LEAD_LOCK_HELD=0
+  fm_lock_release "$SPAWN_LEAD_LOCK" || true
 fi
 
 # Fuse the backlog In-flight transition into the publication that just created
@@ -3343,4 +3396,4 @@ fi
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
-echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT$SPAWN_LEADER_SUFFIX"
