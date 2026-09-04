@@ -169,6 +169,13 @@ Each record is bound to an incarnation token minted when the task's wiring is ar
 Three rendered-text checks deliberately remain outside this contract because they answer delivery questions: submit acknowledgement and the away-mode supervisor-pane busy guard consume the shared delivery-footer matcher owned by `bin/fm-composer-lib.sh`, while `bin/fm-pending-reply-lib.sh` owns the secondmate delivery-confirmation observation.
 All are harness-scoped rather than a global pattern union, and none is a recorded worker state source.
 
+## Worker auto-compaction
+
+A claude worker's context compacts at a measured trigger instead of filling its whole window, and the story spine comes back from disk after each compaction.
+`bin/fm-compact-lib.sh` owns the measured trigger law and the pure decision; `bin/fm-spawn.sh` writes the measured `autoCompactWindow` into the worker worktree's `.claude/settings.local.json` (project-local settings beat user settings, so captain and primary sessions are untouched) and wires both hooks; `bin/fm-compact-spine.sh` is the SessionStart compact hook that appends the `compacted <n> at <largest>` ledger line to the task status, writes the one-compaction incident line to the home's learnings, and prints the brief, budget, ledger, status tail, report, and branch commits from disk so the compaction summary is never trusted with anything that matters; `bin/fm-compact-stop.sh` is the PreToolUse hook that denies further tool calls at a second compaction until firstmate appends a `compaction-stop-lifted:` line to the status.
+The brief's `Budget:` line is the gate: without one, every part stays silent.
+`tests/token-budget.test.sh` pins the decision, the parsers, the hooks' output and side effects, and the spawn wiring.
+
 ## Runtime session backends
 
 The runtime backend is the session-provider layer below firstmate's scripts.
