@@ -1,112 +1,153 @@
-# shellcheck shell=bash
-# Pure decision core for worker auto-compaction (AGENTS.md section 7's
-# crewmates-compact-at-120k story). Sourced by bin/fm-compact-spine.sh,
-# bin/fm-compact-stop.sh, and tests/token-budget.test.sh; no I/O of its own
-# beyond reading the files its callers name.
+#!/usr/bin/env bash
+# Pure decision core for the worker auto-compaction machinery. No I/O of its
+# own beyond reading the files its callers name.
 #
-# THE MEASURED TRIGGER LAW (claude 2.1.259, measured on a live interactive TUI
-# on this machine, 2026-09-04; see the task report for the full rehearsal):
-# auto-compaction fires when the session's context reaches
-# autoCompactWindow - 33000 tokens. The 33k "Autocompact buffer" is flat, not a
-# ratio: verified at window 120000 -> fired at 87000, window 153000 -> fired at
-# exactly 120000, window 200000 -> fired at 167000. Therefore the window that
-# triggers compaction at exactly 120000 tokens is 153000, and that is what
-# bin/fm-spawn.sh writes into each claude worker worktree's
-# .claude/settings.local.json as autoCompactWindow. Headless `claude -p`
-# sessions never auto-compact at all, so the setting changes nothing for them.
-# Project-local settings beat user settings, so the captain's own sessions
-# (window 500000 in the user settings) are untouched.
+# The measured trigger law (claude 2.1.259, live interactive TUI, 2026-09-04):
+#   - Headless `claude -p` never auto-compacts; the machinery is wired for the
+#     interactive TUI workers actually run.
+#   - With autoCompactWindow set to W, auto-compaction fires at the first
+#     between-turn context check after the context crosses W - 33000. The 33k
+#     "Autocompact buffer" is flat: verified at W=120k (fired at 87k),
+#     W=153k (fired at exactly 120,000), and W=200k (fired at 167k).
+#   - The trigger is only checked between turns, so one large turn can carry
+#     the true peak well past the crossing before the check runs. The crossing
+#     (~120k) is the trigger; the peak the transcript records is the crossing
+#     plus whatever the last turn added. Both numbers are real and mean
+#     different things; see docs/architecture.md "Worker auto-compaction".
+#   - Below the documented 100000 floor the window silently clamps.
+#   - Project-local settings beat user settings; sessions read settings at
+#     startup only.
 #
-# THE DECISION, owned here and nowhere else:
-#   count 0 -> silent   (the 140k-and-under world is unchanged)
-#   count 1 -> incident (one line in data/learnings.md naming story and peak)
-#   count >= 2 -> stop  (the PreToolUse hook denies further tool calls)
-# A budget of 0 or absent means the brief carried no Budget line, and the whole
-# machinery stays silent: the gate is the brief, not the ledger. The largest
-# context never changes the decision - it is reportable evidence only.
-set -u
+# fm-spawn writes the measured window into every claude worker worktree's
+# .claude/settings.local.json, so a worker's head compacts at ~120k.
+FM_COMPACT_WINDOW_TOKENS=${FM_COMPACT_WINDOW_TOKENS:-153000}
+FM_COMPACT_BUFFER_TOKENS=${FM_COMPACT_BUFFER_TOKENS:-33000}
+FM_COMPACT_TRIGGER_TOKENS=$((FM_COMPACT_WINDOW_TOKENS - FM_COMPACT_BUFFER_TOKENS))
+# Consumed by bin/fm-spawn.sh when it writes the task record's budget= field.
+export FM_COMPACT_TRIGGER_TOKENS
+# A genuine second compaction must regrow ~120k tokens of context first, so a
+# duplicate delivery of the SAME compaction event is any re-fire within this
+# many seconds that also claims the same count from the same session.
+FM_COMPACT_DEDUP_WINDOW=${FM_COMPACT_DEDUP_WINDOW:-15}
 
-# The measured window written at spawn (see the law above).
-FM_COMPACT_WINDOW_TOKENS=153000
-
-# Duplicate-fire dedup window in seconds. One compaction event can reach this
-# hook twice: the tracked .claude/settings.json entry and the spawn-written
-# settings.local.json entry merge into the same session and their command
-# strings differ, so both run. The two fires land within a couple of seconds of
-# each other; a GENUINE second compaction cannot, because it requires the
-# session to regrow ~120k tokens of context first.
-FM_COMPACT_DEDUP_WINDOW=15
-
-# fm_compact_budget_from_brief <brief-path>: echo the story's budget in tokens,
-# or nothing when the brief has no parseable `Budget:` line. Line-anchored on
-# the Budget: prefix so a number elsewhere in the brief never parses. K/k
-# multiplies by 1000, M/m by 1000000, commas are stripped. A decimal number
-# (1.2M) parses to NOTHING rather than to a wrong integer.
+# fm_compact_budget_from_brief <brief>
+# The brief's `Budget:` line, when a human wrote one. A number with an
+# optional K/M suffix; commas stripped; decimals refused rather than rounded.
+# This is the OVERRIDE path: fm-spawn writes the machine record (see
+# fm_compact_budget_from_meta), and real scaffold briefs carry no Budget line.
 fm_compact_budget_from_brief() {
-  local brief=$1 line rest tok num suf
-  [ -n "$brief" ] && [ -f "$brief" ] || return 0
-  line=$(grep -m1 -E '^[[:space:]]*Budget:' "$brief" 2>/dev/null) || return 0
-  rest=${line#*:}
-  rest=${rest//,/}
-  tok=$(printf '%s' "$rest" | grep -oE '[0-9]+(\.[0-9]+)?[KkMm]?' | head -1) || return 0
-  [ -n "$tok" ] || return 0
-  case $tok in *.*) return 0 ;; esac
-  num=${tok//[!0-9]/}
-  [ -n "$num" ] || return 0
-  suf=${tok##*[0-9]}
-  case $suf in
-    K | k) num=$((num * 1000)) ;;
-    M | m) num=$((num * 1000000)) ;;
-  esac
-  printf '%s\n' "$num"
+  local line
+  line=$(grep -m1 -E '^[[:space:]]*Budget:' "$1" 2>/dev/null) || return 0
+  fm_compact_budget_from_line "$line"
 }
 
-# fm_compact_decide <largest> <count> <budget>: echo silent|incident|stop.
-# Junk numerics read as 0, so malformed input can neither fabricate nor evade
-# a verdict: a junk peak still stops at count 2, and a junk count cannot
-# reach it.
+# fm_compact_budget_from_meta <meta>
+# The `budget=` field fm-spawn writes into every claude worker's task record.
+# This is the gate's normal key: it exists for every spawned claude worker
+# without depending on a brief line nobody writes.
+fm_compact_budget_from_meta() {
+  local line
+  line=$(grep -m1 -E '^budget=' "$1" 2>/dev/null) || return 0
+  fm_compact_budget_from_line "$line"
+}
+
+fm_compact_budget_from_line() {
+  local num
+  num=$(printf '%s' "$1" | tr -d ',' | grep -oE '[0-9]+(\.[0-9]+)?[KkMm]?' | head -1)
+  [ -n "$num" ] || return 0
+  case $num in
+    *.*.*) return 0 ;;
+    *.*)
+      # A decimal budget would round to a lie; refuse it.
+      return 0
+      ;;
+  esac
+  local value=${num%[KkMm]}
+  case $num in
+    *[Kk]) value=$((value * 1000)) ;;
+    *[Mm]) value=$((value * 1000000)) ;;
+  esac
+  printf '%s\n' "$value"
+}
+
+# fm_compact_decide <largest> <count> <budget>
+# silent:  no budget (the gate never opened) or no compaction yet.
+# incident: first compaction - the learnings incident line records it, the
+#           story carries on, nobody is woken.
+# signal:   second or later compaction - the worker carries straight on and
+#           the branch leader is told once per event so it can steer.
 fm_compact_decide() {
   local largest=$1 count=$2 budget=$3
-  case $largest in '' | *[!0-9]*) largest=0 ;; esac
-  case $count in '' | *[!0-9]*) count=0 ;; esac
-  case $budget in '' | *[!0-9]*) budget=0 ;; esac
-  [ "$budget" -gt 0 ] || { printf 'silent\n'; return 0; }
-  [ "$count" -ge 1 ] || { printf 'silent\n'; return 0; }
-  [ "$count" -ge 2 ] && { printf 'stop\n'; return 0; }
-  printf 'incident\n'
+  [ -n "$budget" ] && [ "$budget" -gt 0 ] 2>/dev/null || { printf 'silent\n'; return 0; }
+  case $count in '' | *[!0-9]* | 0) printf 'silent\n'; return 0 ;; esac
+  if [ "$count" -eq 1 ]; then
+    printf 'incident\n'
+  else
+    printf 'signal\n'
+  fi
 }
 
-# fm_compact_hold_sentence <largest> <budget>: the one sentence the stop hook
-# shows the worker and the spine prints at the second compaction.
-fm_compact_hold_sentence() {
-  printf 'This story compacted twice (peak %s tokens against a %s-token budget): stop and hold - further tool calls will be denied until firstmate splits the story or explicitly lifts the stop.\n' "$1" "$2"
+# fm_compact_signal_message <id> <count> <largest> <budget>
+# The one short line the branch leader is told: which worker compacted, how
+# often, on what budget, and what steering decision that creates.
+fm_compact_signal_message() {
+  local id=$1 count=$2 largest=$3 budget=$4 times
+  case $count in
+    2) times=twice ;;
+    *) times="$count times" ;;
+  esac
+  printf '%s compacted %s (peak %s tokens against a %s-token budget) - steer or split the story' \
+    "$id" "$times" "$largest" "$budget"
 }
 
-# fm_compact_count_from_status <status-file>: how many ledger lines the story
-# has. A ledger line is exactly `compacted <n> at <largest>`; trailing prose
-# makes it prose, not a ledger line, because these hooks are their only writer.
-fm_compact_count_from_status() {
-  local file=$1 n
-  [ -n "$file" ] && [ -f "$file" ] || { printf '0\n'; return 0; }
-  # grep -c prints 0 (exit 1) on no match; capture rather than fall back, or
-  # the miss case would print two zeros.
-  n=$(grep -cE '^compacted [0-9]+ at [0-9]+$' "$file" 2>/dev/null)
+# fm_compact_count_from_ledger <ledger>
+# Fires this machinery itself recorded, one `compacted <n> at <largest>` line
+# per event. The fallback count for a transcript that cannot be read; the
+# transcript's boundary rows are the primary count (see below).
+fm_compact_count_from_ledger() {
+  local n
+  n=$(grep -cE '^compacted [0-9]+ at [0-9]+$' "$1" 2>/dev/null)
   printf '%s\n' "${n:-0}"
 }
 
-# fm_compact_last_largest_from_status <status-file>: the peak from the most
-# recent ledger line, or nothing when the ledger is empty.
-fm_compact_last_largest_from_status() {
-  local file=$1
-  [ -n "$file" ] && [ -f "$file" ] || return 0
-  grep -E '^compacted [0-9]+ at [0-9]+$' "$file" 2>/dev/null | tail -1 | awk '{print $4}'
-  return 0
+# fm_compact_count_from_boundaries <transcript>
+# How many times this session has compacted, counted from the transcript's
+# own type:"system" subtype:"compact_boundary" rows. Every compaction writes
+# one whether or not this machinery was installed when it happened, so the
+# count stays true across sessions that ran before the gate opened or through
+# a missed fire. Prints nothing (empty) when the transcript cannot be read;
+# the caller falls back to the ledger.
+fm_compact_count_from_boundaries() {
+  [ -n "$1" ] && [ -f "$1" ] || return 0
+  local n
+  n=$(jq -r 'select(.type == "system" and .subtype == "compact_boundary") | 1' "$1" 2>/dev/null | grep -c .)
+  printf '%s\n' "${n:-0}"
 }
 
-# fm_compact_status_has_lift <status-file>: exit 0 when the status file carries
-# a firstmate-written `compaction-stop-lifted:` line releasing the stop.
-fm_compact_status_has_lift() {
-  local file=$1
-  [ -n "$file" ] && [ -f "$file" ] || return 1
-  grep -q '^compaction-stop-lifted:' "$file" 2>/dev/null
+# fm_compact_peak_from_transcript <transcript>
+# The peak context of the compaction that just fired: the largest usage row
+# AFTER the transcript's last compact_boundary, because the file's all-time
+# maximum belongs to an earlier head once the session has compacted before.
+# Sums input + cache_read + cache_creation; sidechain rows are skipped. A
+# missing, lagging, or unreadable transcript - all observed live - reads as
+# peak 0 rather than a fabricated number.
+fm_compact_peak_from_transcript() {
+  local path=$1 start peak
+  [ -n "$path" ] && [ -f "$path" ] || { printf '0\n'; return 0; }
+  # input_line_number on a JSONL transcript is exact: find the last boundary
+  # row's line, slice the FILE from after it (so the line numbers align), then
+  # read the usage rows of that slice only.
+  start=$(jq -r 'select(.type == "system" and .subtype == "compact_boundary") | input_line_number' "$path" 2>/dev/null | tail -1)
+  case ${start:-} in '' | *[!0-9]*) start=0 ;; esac
+  if [ "$start" -gt 0 ]; then
+    peak=$(tail -n +"$((start + 1))" -- "$path" \
+      | jq -r 'select(.isSidechain != true) | .message.usage? | select(. != null) |
+               ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' 2>/dev/null \
+      | sort -n | tail -1)
+  else
+    peak=$(jq -r 'select(.isSidechain != true) | .message.usage? | select(. != null) |
+                  ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' \
+            "$path" 2>/dev/null | sort -n | tail -1)
+  fi
+  printf '%s\n' "${peak:-0}"
 }

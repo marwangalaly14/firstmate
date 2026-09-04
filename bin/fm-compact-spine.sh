@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # SessionStart hook (matcher "compact"): after a worker's context is compacted,
 # print the story spine back to the session FROM DISK, and keep the story's
-# compaction ledger in its status file. The design contract is the
+# compaction ledger in its own file. The design contract is the
 # crewmates-compact-at-120k story: the loop's state already lives in the brief,
-# the status file, the report, and the branch, so the compaction summary is
-# never trusted with anything that matters - read from disk, always.
+# the ledger, the report, and the branch, so the compaction summary is never
+# trusted with anything that matters - read from disk, always.
 #
 # Stdin: the Claude SessionStart hook payload. The hook answers ONLY
 # {"hook_event_name":"SessionStart","source":"compact"}; every other payload,
-# a missing jq, an unresolvable story, or a brief without a `Budget:` line is
-# a silent exit 0 that writes nothing. The brief's Budget line is the gate:
-# sessions with no recorded budget (the captain's, firstmate's, every
-# non-worker session) never see this hook output.
+# a missing jq, an unresolvable story, or a story with no recorded budget is
+# a silent exit 0 that writes nothing. The budget is the gate, and it comes
+# from the machine record fm-spawn writes (state/<id>.meta `budget=`), with a
+# hand-written brief `Budget:` line as the override. Sessions with neither -
+# the captain's, firstmate's own, every non-spawned session - never see this
+# hook output.
 #
 # Story resolution, two modes:
 #   --home <FM_HOME> --id <task-id>   explicit; what bin/fm-spawn.sh writes
@@ -19,22 +21,31 @@
 #   (no args)                         derive from the payload: cwd must be a
 #                                     git worktree or repo on branch fm/<id>,
 #                                     and the owning home is the git common
-#                                     dir's parent (validated: state/ and bin/
-#                                     exist). This is the tracked
-#                                     .claude/settings.json entry's shape for
-#                                     workers inside firstmate-repo worktrees.
+#                                     dir's parent (validated: state/ exists).
+#                                     This is the tracked .claude/settings.json
+#                                     entry's shape for workers inside
+#                                     firstmate-repo worktrees.
 #
 # Side effects, all under the per-story state lock:
-#   state/<id>.status         += `compacted <n> at <largest>` (exact line; the
-#                              ledger the stop hook counts)
-#   n = 1: data/learnings.md  += one incident line naming story, peak, budget
-#   n >= 2: state/<id>.status += `blocked: ...` so firstmate wakes
+#   state/<id>.compactions   += `compacted <n> at <peak>` (the story's ledger,
+#                             in its OWN file - the status log is the wake
+#                             channel and its last line is read as current
+#                             state, so this hook never writes there)
+#   n = 1: data/learnings.md += one incident line naming story, peak, budget
+#   n >= 2: state/.wake-queue += one `signal` wake for the branch leader;
+#                             the worker itself is NOT stopped or slowed
 #   state/.<id>.compact-fire  = "<epoch> <n> <session>" duplicate-fire marker
 #
-# `largest` is the peak context measured from the transcript's usage rows
-# (input + cache_read + cache_creation, sidechain rows skipped). A missing,
-# lagging, or unreadable transcript - the rehearsal showed both happen - reads
-# as peak 0 and says so in the spine text rather than fabricating a number.
+# The count comes from the transcript's own type:"system"
+# subtype:"compact_boundary" rows plus one for the compaction that just
+# fired, so it stays true even when earlier compactions ran before this
+# machinery was installed or through a missed fire. When the transcript is
+# unreadable, the ledger count plus one is the fallback.
+#
+# `peak` is the context of THIS compaction: the largest usage row after the
+# transcript's last boundary row (bin/fm-compact-lib.sh owns the reading). A
+# missing, lagging, or unreadable transcript reads as peak 0 and says so
+# rather than fabricating a number.
 #
 # Duplicate-fire dedup: one compaction event can reach this hook twice because
 # the tracked settings entry and the spawn-written entry merge into one
@@ -89,7 +100,7 @@ else
   FM_DERIVED=1
   # Derive mode: the story is the fm/<id> branch of the payload cwd; the
   # owning home is the parent of the git common dir. Anything else - not a
-  # repo, another branch shape, a home without state/ and bin/ - stays silent.
+  # repo, another branch shape, a home without state/ - stays silent.
   [ -n "$CWD" ] && [ -d "$CWD" ] || silent_exit
   BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null) || silent_exit
   case $BRANCH in
@@ -109,24 +120,18 @@ fi
 [ "$FM_DERIVED" = 1 ] && [ ! -d "$FM_HOME/bin" ] && silent_exit
 
 BRIEF="$FM_HOME/data/$FM_ID/brief.md"
+# The brief line wins when a human wrote one; the spawn-written meta record is
+# the normal gate key. Neither means the gate stays closed.
 BUDGET=$(fm_compact_budget_from_brief "$BRIEF")
+if [ -z "$BUDGET" ]; then
+  BUDGET=$(fm_compact_budget_from_meta "$FM_HOME/state/$FM_ID.meta")
+fi
 [ -n "$BUDGET" ] || silent_exit
 
-STATUS="$FM_HOME/state/$FM_ID.status"
+LEDGER="$FM_HOME/state/$FM_ID.compactions"
 LEARNINGS="$FM_HOME/data/learnings.md"
 MARKER="$FM_HOME/state/.$FM_ID.compact-fire"
 LOCK="$FM_HOME/state/.$FM_ID.compact-lock"
-
-# Peak context from the transcript's usage rows, streamed one line at a time.
-# jq exits nonzero on a malformed line mid-stream; the numbers it already
-# printed are still piped through, so the max of what was readable wins.
-fm_compact_peak_from_transcript() {
-  local path=$1
-  [ -n "$path" ] && [ -f "$path" ] || { printf '0\n'; return 0; }
-  jq -r 'select(.isSidechain != true) | .message.usage? | select(. != null) |
-         ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' \
-    "$path" 2>/dev/null | sort -n | tail -1
-}
 
 # Minimal portable critical section: mkdir is atomic on every supported
 # platform. Bounded spin; losing means the other settings-layer fire of the
@@ -158,7 +163,17 @@ if ! fm_compact_acquire_lock "$LOCK"; then
   silent_exit
 fi
 
-COUNT=$(fm_compact_count_from_status "$STATUS")
+# Count from the transcript's own boundaries when it can be read: boundaries
+# recorded before this fire, plus one for the compaction that just happened.
+# Every earlier head's compaction is counted whether or not this machinery
+# was installed when it fired.
+BOUNDARIES=$(fm_compact_count_from_boundaries "$TRANSCRIPT")
+if [ -n "$BOUNDARIES" ]; then
+  N=$((BOUNDARIES + 1))
+else
+  LEDGER_COUNT=$(fm_compact_count_from_ledger "$LEDGER")
+  N=$((LEDGER_COUNT + 1))
+fi
 NOW=$(date +%s)
 
 # Duplicate fire of the event this session already appended (see header).
@@ -167,7 +182,7 @@ if [ -f "$MARKER" ]; then
   MARKER_N=$(awk '{print $2}' "$MARKER" 2>/dev/null)
   MARKER_SESSION=$(awk '{print $3}' "$MARKER" 2>/dev/null)
   case $MARKER_EPOCH in '' | *[!0-9]*) MARKER_EPOCH=0 ;; esac
-  if [ "$MARKER_SESSION" = "$SESSION" ] && [ "$MARKER_N" = "$COUNT" ] \
+  if [ "$MARKER_SESSION" = "$SESSION" ] && [ "$MARKER_N" = "$N" ] \
     && [ "$((NOW - MARKER_EPOCH))" -lt "$FM_COMPACT_DEDUP_WINDOW" ]; then
     fm_compact_release_lock "$LOCK"
     silent_exit
@@ -176,17 +191,25 @@ fi
 
 PEAK=$(fm_compact_peak_from_transcript "$TRANSCRIPT")
 case $PEAK in '' | *[!0-9]*) PEAK=0 ;; esac
-N=$((COUNT + 1))
 
-printf 'compacted %s at %s\n' "$N" "$PEAK" >> "$STATUS"
+printf 'compacted %s at %s\n' "$N" "$PEAK" >> "$LEDGER"
 
-if [ "$N" -eq 1 ]; then
-  {
-    printf -- '- %s - `%s` compacted once (peak %s tokens) on a story briefed at %s tokens.\n' \
-      "$(date +%F)" "$FM_ID" "$PEAK" "$BUDGET"
-  } >> "$LEARNINGS"
-elif [ "$N" -ge 2 ]; then
-  printf 'blocked: second auto-compaction on this story; firstmate must split the story or lift the stop\n' >> "$STATUS"
+DECIDE=$(fm_compact_decide "$PEAK" "$N" "$BUDGET")
+
+if [ "$DECIDE" = incident ]; then
+  printf -- '- %s - %s\n' "$(date +%F)" \
+    "\`$FM_ID\` compacted once (peak $PEAK tokens) on a story briefed at $BUDGET tokens." >> "$LEARNINGS"
+elif [ "$DECIDE" = signal ]; then
+  # The worker carries straight on. The branch leader is the one told: a
+  # durable signal wake the supervising actor drains, with the one short
+  # message naming which worker compacted and on what.
+  export FM_HOME
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  # A failed signal must never fail the spine: the worker's carry-on is the
+  # contract, and the wake queue stays the leader's best-effort channel.
+  fm_wake_append signal "$FM_ID" \
+    "$(fm_compact_signal_message "$FM_ID" "$N" "$PEAK" "$BUDGET")" >/dev/null 2>&1 || true
 fi
 
 printf '%s %s %s\n' "$NOW" "$N" "$SESSION" > "$MARKER"
@@ -197,8 +220,11 @@ printf 'Your context was compacted. This spine is read from disk, not from the c
 printf 'Story: %s\nBrief: %s\n' "$FM_ID" "$BRIEF"
 
 if [ -f "$BRIEF" ]; then
-  if grep -q '^## Definition of done' "$BRIEF" 2>/dev/null; then
-    sed -n '/^## Definition of done/,$p' "$BRIEF" | head -60
+  # Real scaffold briefs write the section with one hash
+  # (bin/fm-brief.sh); the match tolerates any heading level so a
+  # hand-restructured brief cannot hide the section either.
+  if grep -qE '^#{1,6} Definition of done' "$BRIEF" 2>/dev/null; then
+    sed -nE '/^#{1,6} Definition of done/,$p' "$BRIEF" | head -60
   else
     sed -n "/^## Captain's intent/,\$p" "$BRIEF" | head -60
   fi
@@ -212,7 +238,7 @@ if [ "$PEAK" = "0" ]; then
 fi
 
 printf '\nRecent status events (wake-event history, not current state):\n'
-tail -12 "$STATUS" 2>/dev/null
+tail -12 "$FM_HOME/state/$FM_ID.status" 2>/dev/null
 
 REPORT="$FM_HOME/data/$FM_ID/report.md"
 if [ -f "$REPORT" ]; then
@@ -231,8 +257,7 @@ fi
 if [ "$N" -eq 1 ]; then
   printf '\nAppend one line to your status file naming WHY this story was too big for the window, so the incident record carries the cause and firstmate can split it.\n'
 elif [ "$N" -ge 2 ]; then
-  printf '\n%s\n' "$(fm_compact_hold_sentence "$PEAK" "$BUDGET")"
-  printf 'Your further tool calls will be denied. Firstmate has been notified through the blocked status line and will split the story or explicitly lift the stop.\n'
+  printf '\nThis story has compacted %s times. Your work is NOT interrupted: carry straight on. The branch leader has been told so it can steer.\n' "$N"
 fi
 
 exit 0

@@ -2726,17 +2726,16 @@ if [ "$KIND" != secondmate ]; then
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
       # Worker auto-compaction (bin/fm-compact-lib.sh owns the measured law):
       # write the measured window so a worker's context compacts at 120k
-      # instead of filling its whole window, and wire the two story hooks -
-      # the SessionStart spine (compaction summary replaced by the story state
-      # read back from disk) and the PreToolUse stop (further tool calls
-      # denied at a second compaction until firstmate splits or lifts).
-      # Project-local settings beat user settings, so the captain's and
-      # firstmate's own sessions (different windows) are untouched, and
-      # headless -p sessions never auto-compact at all.
+      # instead of filling its whole window, and wire the SessionStart spine
+      # (compaction summary replaced by the story state read back from disk;
+      # a second compaction signals the branch leader, it never stops the
+      # worker). The spine's gate key is the budget= field this spawn writes
+      # into the task record below. Project-local settings beat user settings,
+      # so the captain's and firstmate's own sessions (different windows) are
+      # untouched, and headless -p sessions never auto-compact at all.
       j_spine=$(json_escape "exec $(shell_quote "$FM_ROOT/bin/fm-compact-spine.sh") --home $(shell_quote "$FM_HOME") --id $(shell_quote "$ID")")
-      j_compactstop=$(json_escape "exec $(shell_quote "$FM_ROOT/bin/fm-compact-stop.sh") --home $(shell_quote "$FM_HOME") --id $(shell_quote "$ID")")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"autoCompactWindow":$FM_COMPACT_WINDOW_TOKENS,"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"compact","hooks":[{"type":"command","command":"$j_spine"}]}],"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"$j_compactstop"}]}]}}
+{"autoCompactWindow":$FM_COMPACT_WINDOW_TOKENS,"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"compact","hooks":[{"type":"command","command":"$j_spine"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
@@ -3051,7 +3050,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort budget busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3063,6 +3062,12 @@ preserve_relaunch_meta() {
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
+  # The compaction spine's gate key (bin/fm-compact-lib.sh owns the value):
+  # written for claude workers so the gate opens without depending on a brief
+  # line nobody writes. Absent for every other harness.
+  if [ "$HARNESS" = claude ]; then
+    echo "budget=$FM_COMPACT_TRIGGER_TOKENS"
+  fi
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
