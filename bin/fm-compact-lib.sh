@@ -202,25 +202,3 @@ fm_compact_scan_transcript() {
     }'
 }
 
-# fm_compact_count_from_boundaries <transcript>
-# The automatic-compaction count of one scan (see fm_compact_scan_transcript).
-# Prints
-# nothing when the transcript cannot be read; the caller falls back to the
-# ledger.
-fm_compact_count_from_boundaries() {
-  local scan
-  scan=$(fm_compact_scan_transcript "${1:-}")
-  [ -n "$scan" ] || return 0
-  printf '%s\n' "${scan%% *}"
-}
-
-# fm_compact_peak_from_transcript <transcript>
-# The peak of one scan (see fm_compact_scan_transcript). A missing, lagging, or
-# unreadable transcript - all observed live - reads as peak 0 rather than a
-# fabricated number.
-fm_compact_peak_from_transcript() {
-  local scan
-  scan=$(fm_compact_scan_transcript "${1:-}")
-  [ -n "$scan" ] || { printf '0\n'; return 0; }
-  printf '%s\n' "${scan##* }"
-}

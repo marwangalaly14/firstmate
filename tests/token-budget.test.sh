@@ -244,24 +244,21 @@ test_boundary_count_and_peak() {
   local t="$TMP_ROOT/boundary/t.jsonl"
   mkdir -p "$(dirname "$t")"
   make_boundary_transcript "$t"
-  [ "$(fm_compact_count_from_boundaries "$t")" = '2' ] || fail "two boundary rows must count 2"
-  [ "$(fm_compact_peak_from_transcript "$t")" = '8000' ] || fail "peak must read only rows after the last boundary, got $(fm_compact_peak_from_transcript "$t")"
-  : > "$TMP_ROOT/boundary/empty.jsonl"
-  [ "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/empty.jsonl")" = '0' ] || fail "no boundaries counts 0"
-  [ "$(fm_compact_peak_from_transcript "$TMP_ROOT/boundary/empty.jsonl")" = '0' ] || fail "no usage rows peak 0"
-  [ -z "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/missing.jsonl")" ] || fail "missing transcript yields no count (caller falls back to the ledger)"
-  printf 'not json at all\n{"type":"system","subtype":"compact_bound\n' > "$TMP_ROOT/boundary/malformed.jsonl"
-  [ -z "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/malformed.jsonl")" ] \
-    || fail "an unparseable transcript must yield no count, not 0: got $(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/malformed.jsonl")"
-  # Both answers come from ONE read of the file; the pair must agree with the
-  # fixture exactly as the two separate readings did.
+  # One read of the file answers both questions, so both are asserted from the
+  # pair it returns: "<automatic compactions> <peak after the last boundary>".
   [ "$(fm_compact_scan_transcript "$t")" = '2 8000' ] \
-    || fail "one scan must answer both count and peak, got: $(fm_compact_scan_transcript "$t")"
+    || fail "two boundary rows and the post-boundary peak, got: $(fm_compact_scan_transcript "$t")"
+  : > "$TMP_ROOT/boundary/empty.jsonl"
+  [ "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/empty.jsonl")" = '0 0' ] \
+    || fail "an empty transcript scans no compactions and no peak"
   make_transcript "$TMP_ROOT/boundary/flat.jsonl"
   [ "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/flat.jsonl")" = '0 5000' ] \
     || fail "a never-compacted transcript scans 0 boundaries and its largest non-sidechain row"
-  [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/malformed.jsonl")" ] || fail "an unparseable transcript scans empty"
-  [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/missing.jsonl")" ] || fail "a missing transcript scans empty"
+  [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/missing.jsonl")" ] \
+    || fail "a missing transcript scans empty (the caller falls back to the ledger)"
+  printf 'not json at all\n{"type":"system","subtype":"compact_bound\n' > "$TMP_ROOT/boundary/malformed.jsonl"
+  [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/malformed.jsonl")" ] \
+    || fail "an unparseable transcript must scan empty, not 0: got $(fm_compact_scan_transcript "$TMP_ROOT/boundary/malformed.jsonl")"
   # A hand-run /compact ends the head - so the peak is still read from after
   # it - but it is not the head filling up, so it is not counted.
   make_manual_compact_transcript "$TMP_ROOT/boundary/manual.jsonl"
@@ -270,8 +267,7 @@ test_boundary_count_and_peak() {
   make_boundary_last_transcript "$TMP_ROOT/boundary/tail.jsonl"
   [ "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/tail.jsonl")" = '1 0' ] \
     || fail "a readable transcript ending at its boundary scans a real count and peak 0"
-  [ "$(fm_compact_peak_from_transcript "$TMP_ROOT/boundary/missing.jsonl")" = '0' ] || fail "missing transcript peaks 0"
-  pass "count comes from the transcript's boundaries and the peak from after the last one"
+  pass "one scan of the transcript answers both the compaction count and the peak"
 }
 
 # --- spine hook ---------------------------------------------------------------
@@ -511,7 +507,7 @@ test_spine_count_survives_a_relaunch() {
   transcript="$TMP_ROOT/spine-relaunch/transcript.jsonl"
   mkdir -p "$(dirname "$transcript")"
   make_transcript "$transcript"
-  [ "$(fm_compact_count_from_boundaries "$transcript")" = '0' ] || fail "the relaunched session's transcript must carry no boundaries"
+  [ "$(fm_compact_scan_transcript "$transcript")" = '0 5000' ] || fail "the relaunched session's transcript must carry no boundaries"
 
   out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
   expect_code 0 $? "a relaunched worker's compaction must exit 0"
@@ -621,16 +617,16 @@ test_spine_dedup_survives_a_slow_transcript_read() {
   cat > "$fakedir/jq" <<EOF
 #!/bin/sh
 for arg in "\$@"; do
-  if [ "\$arg" = "$transcript" ]; then sleep 2; fi
+  if [ "\$arg" = "$transcript" ]; then sleep 4; fi
 done
 exec "$realjq" "\$@"
 EOF
   chmod +x "$fakedir/jq"
 
   compact_payload "$SPINE_SESSION" "$transcript" "$home" \
-    | PATH="$fakedir:$PATH" FM_COMPACT_DEDUP_WINDOW=3 "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
+    | PATH="$fakedir:$PATH" FM_COMPACT_DEDUP_WINDOW=6 "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
   compact_payload "$SPINE_SESSION" "$transcript" "$home" \
-    | PATH="$fakedir:$PATH" FM_COMPACT_DEDUP_WINDOW=3 "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
+    | PATH="$fakedir:$PATH" FM_COMPACT_DEDUP_WINDOW=6 "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
 
   [ "$(grep -c '^compacted ' "$ledger")" = '1' ] \
     || fail "a slow transcript read must not age the marker out of the dedup window, ledger: $(cat "$ledger")"
