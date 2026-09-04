@@ -313,6 +313,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-compact-lib.sh
+. "$SCRIPT_DIR/fm-compact-lib.sh"
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -2722,8 +2724,19 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
+      # Worker auto-compaction (bin/fm-compact-lib.sh owns the measured law):
+      # write the measured window so a worker's context compacts at 120k
+      # instead of filling its whole window, and wire the two story hooks -
+      # the SessionStart spine (compaction summary replaced by the story state
+      # read back from disk) and the PreToolUse stop (further tool calls
+      # denied at a second compaction until firstmate splits or lifts).
+      # Project-local settings beat user settings, so the captain's and
+      # firstmate's own sessions (different windows) are untouched, and
+      # headless -p sessions never auto-compact at all.
+      j_spine=$(json_escape "exec $(shell_quote "$FM_ROOT/bin/fm-compact-spine.sh") --home $(shell_quote "$FM_HOME") --id $(shell_quote "$ID")")
+      j_compactstop=$(json_escape "exec $(shell_quote "$FM_ROOT/bin/fm-compact-stop.sh") --home $(shell_quote "$FM_HOME") --id $(shell_quote "$ID")")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
+{"autoCompactWindow":$FM_COMPACT_WINDOW_TOKENS,"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"compact","hooks":[{"type":"command","command":"$j_spine"}]}],"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"$j_compactstop"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
