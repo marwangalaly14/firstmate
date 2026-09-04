@@ -93,14 +93,14 @@ fm_compact_budget_from_line() {
   printf '%s\n' "$value"
 }
 
-# fm_compact_decide <largest> <count> <budget>
+# fm_compact_decide <count> <budget>
 # silent:  no budget (the gate never opened) or no compaction yet.
 # incident: first compaction - the learnings incident line records it, the
 #           story carries on, nobody is woken.
 # signal:   second or later compaction - the worker carries straight on and
 #           the branch leader is told once per event so it can steer.
 fm_compact_decide() {
-  local largest=$1 count=$2 budget=$3
+  local count=$1 budget=$2
   [ -n "$budget" ] && [ "$budget" -gt 0 ] 2>/dev/null || { printf 'silent\n'; return 0; }
   case $count in '' | *[!0-9]* | 0) printf 'silent\n'; return 0 ;; esac
   if [ "$count" -eq 1 ]; then
@@ -158,13 +158,20 @@ fm_compact_count_from_ledger() {
 # megabytes, while the hook runs inside the harness's 60s budget, so the file
 # is read once and the arithmetic is done on the small stream jq emits.
 #
-#   boundary-count  type:"system" subtype:"compact_boundary" rows. Every
-#                   compaction writes one whether or not this machinery was
-#                   installed when it happened, so the count stays true across
-#                   sessions that ran before the gate opened or a missed fire.
-#   peak            the largest usage row AFTER the last boundary row, because
-#                   the file's all-time maximum belongs to an earlier head once
-#                   the session has compacted before. Sums input + cache_read +
+#   boundary-count  type:"system" subtype:"compact_boundary" rows whose
+#                   compactMetadata.trigger is "auto". Every compaction writes
+#                   a boundary row whether or not this machinery was installed
+#                   when it happened, so the count stays true across sessions
+#                   that ran before the gate opened or a missed fire - but a
+#                   hand-run /compact is deliberate tidying, not a head that
+#                   filled, and must never count toward "this story is too
+#                   big". The hook fires on both and cannot tell them apart
+#                   from its payload; only the count needs to, and the
+#                   harness's own trigger field draws the line.
+#   peak            the largest usage row AFTER the last boundary row of ANY
+#                   trigger, because a hand-run trim ends the head just as an
+#                   automatic one does and the file's all-time maximum belongs
+#                   to an earlier head. Sums input + cache_read +
 #                   cache_creation; sidechain rows never count.
 #
 # Prints nothing (empty) when the transcript is missing, or when jq cannot
@@ -175,7 +182,7 @@ fm_compact_scan_transcript() {
   local rows rc
   rows=$(jq -r '
     if (.type == "system" and .subtype == "compact_boundary") then
-      "b \(input_line_number)"
+      "b \(input_line_number) \(.compactMetadata.trigger? // "unknown")"
     elif ((.isSidechain != true) and ((.message.usage? // null) != null)) then
       "u \(input_line_number) \(((.message.usage.input_tokens // 0)
           + (.message.usage.cache_read_input_tokens // 0)
@@ -184,7 +191,7 @@ fm_compact_scan_transcript() {
   rc=$?
   [ "$rc" -eq 0 ] || return 0
   printf '%s\n' "$rows" | awk '
-    $1 == "b" { boundaries++; last = $2 + 0; next }
+    $1 == "b" { last = $2 + 0; if ($3 == "auto") boundaries++; next }
     $1 == "u" { line[++rows] = $2 + 0; tokens[rows] = $3 + 0 }
     END {
       peak = 0
@@ -196,7 +203,8 @@ fm_compact_scan_transcript() {
 }
 
 # fm_compact_count_from_boundaries <transcript>
-# The boundary count of one scan (see fm_compact_scan_transcript). Prints
+# The automatic-compaction count of one scan (see fm_compact_scan_transcript).
+# Prints
 # nothing when the transcript cannot be read; the caller falls back to the
 # ledger.
 fm_compact_count_from_boundaries() {

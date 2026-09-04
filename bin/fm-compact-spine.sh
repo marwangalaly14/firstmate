@@ -41,8 +41,11 @@
 #                             transcript read cannot age it out of the window
 #
 # The count is the STORY's, not the session's: the larger of the transcript's
-# own type:"system" subtype:"compact_boundary" rows and the ledger's recorded
-# fires, plus one for the compaction that just fired. The boundaries carry
+# own automatic compaction boundaries and the ledger's recorded fires, plus one
+# for the compaction that just fired. A hand-run /compact still fires this hook
+# and still earns the spine reprint - it cost the worker its context either way
+# - but it is deliberate tidying rather than a head that filled, so it is not
+# counted (bin/fm-compact-lib.sh reads the harness's own trigger field). The boundaries carry
 # compactions that ran before this machinery was installed or through a missed
 # fire; the ledger carries the story's earlier sessions, which a relaunch
 # leaves out of a brand-new transcript. When the transcript is missing or
@@ -171,9 +174,10 @@ if ! fm_compact_acquire_lock "$LOCK"; then
   silent_exit
 fi
 
-# The story's count, not this session's: the larger of the boundaries this
-# session's transcript records and the fires the ledger recorded across every
-# session of the story, plus one for the compaction that just happened. The
+# The story's count, not this session's: the larger of the automatic
+# compaction boundaries this session's transcript records and the fires the
+# ledger recorded across every session of the story, plus one for the
+# compaction that just happened. The
 # two sources overlap on the same events, so the larger is the true history -
 # and a relaunched worker, whose fresh transcript has no boundaries at all,
 # still counts its story's earlier compactions.
@@ -214,7 +218,7 @@ fi
 
 printf 'compacted %s at %s\n' "$N" "$PEAK" >> "$LEDGER"
 
-DECIDE=$(fm_compact_decide "$PEAK" "$N" "$BUDGET")
+DECIDE=$(fm_compact_decide "$N" "$BUDGET")
 
 if [ "$DECIDE" = incident ]; then
   # The briefed-at clause is written ONLY when a human put a Budget line in the
@@ -260,8 +264,10 @@ fi
 
 printf 'Budget: %s tokens. Compactions so far: %s. Peak context this compaction: %s tokens.\n' \
   "$BUDGET" "$N" "$PEAK"
-if [ "$PEAK" = "0" ]; then
+if [ -z "$SCAN" ]; then
   printf 'The transcript was not readable at compaction time, so the peak is unknown (recorded as 0) - the trigger point, not the measurement, is what fired this hook.\n'
+elif [ "$PEAK" = "0" ]; then
+  printf 'The transcript was readable but carried no usage rows after its last compaction boundary, so the peak is unknown (recorded as 0) - the trigger point, not the measurement, is what fired this hook.\n'
 fi
 
 printf '\nRecent status events (wake-event history, not current state):\n'

@@ -3072,10 +3072,12 @@ preserve_relaunch_meta() {
   echo "harness=$HARNESS"
   # The compaction spine's gate key (bin/fm-compact-lib.sh owns the value):
   # written for claude workers so the gate opens without depending on a brief
-  # line nobody writes. Absent for every other harness.
-  if [ "$HARNESS" = claude ]; then
-    echo "budget=$FM_COMPACT_TRIGGER_TOKENS"
-  fi
+  # line nobody writes. Absent for every other harness. The predicate is the
+  # claude-family one the settings write above uses, so the gate key exists
+  # exactly when the spine hook is wired.
+  case "$HARNESS" in
+    claude*) echo "budget=$FM_COMPACT_TRIGGER_TOKENS" ;;
+  esac
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"

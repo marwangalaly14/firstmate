@@ -55,12 +55,31 @@ make_boundary_transcript() {  # <file>
   # line, which is the transcript's real shape.
   cat > "$1" <<'EOF'
 {"type":"assistant","message":{"usage":{"input_tokens":100000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
-{"type":"system","subtype":"compact_boundary"}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":100000}}
 {"type":"assistant","message":{"usage":{"input_tokens":60000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
-{"type":"system","subtype":"compact_boundary"}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":60000}}
 {"type":"assistant","message":{"usage":{"input_tokens":5000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
 {"isSidechain":true,"message":{"usage":{"input_tokens":99999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
 {"type":"assistant","message":{"usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":8000}}}
+EOF
+}
+
+make_manual_compact_transcript() {  # <file>
+  # A session the worker tidied by hand: the boundary row carries the
+  # harness's own trigger:"manual", and 7000 is the largest row after it.
+  cat > "$1" <<'EOF'
+{"type":"assistant","message":{"usage":{"input_tokens":90000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":90000}}
+{"type":"assistant","message":{"usage":{"input_tokens":7000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+EOF
+}
+
+make_boundary_last_transcript() {  # <file>
+  # Readable, and the last row IS the boundary: nothing has been written after
+  # the compaction yet, so there is no usage row to take a peak from.
+  cat > "$1" <<'EOF'
+{"type":"assistant","message":{"usage":{"input_tokens":90000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":90000}}
 EOF
 }
 
@@ -165,16 +184,14 @@ test_meta_budget_parser() {
 }
 
 test_decision_matrix() {
-  [ "$(fm_compact_decide 130000 0 140000)" = 'silent' ] || fail "no compaction is silent"
-  [ "$(fm_compact_decide 130000 1 140000)" = 'incident' ] || fail "one compaction is the incident line"
-  [ "$(fm_compact_decide 130000 2 140000)" = 'signal' ] || fail "two compactions signal the branch leader"
-  [ "$(fm_compact_decide 130000 5 140000)" = 'signal' ] || fail "more than two still signal"
-  [ "$(fm_compact_decide 130000 2 0)" = 'silent' ] || fail "zero budget is silent: the gate is the budget"
-  [ "$(fm_compact_decide 130000 2 '')" = 'silent' ] || fail "absent budget is silent"
-  [ "$(fm_compact_decide 0 2 140000)" = 'signal' ] || fail "an unmeasured peak must not weaken the signal"
-  [ "$(fm_compact_decide abc 2 140000)" = 'signal' ] || fail "junk peak must not evade the signal"
-  [ "$(fm_compact_decide 130000 x 140000)" = 'silent' ] || fail "junk count must not fabricate a compaction"
-  [ "$(fm_compact_decide 130000 02 140000)" = 'signal' ] || fail "zero-padded count still signals"
+  [ "$(fm_compact_decide 0 140000)" = 'silent' ] || fail "no compaction is silent"
+  [ "$(fm_compact_decide 1 140000)" = 'incident' ] || fail "one compaction is the incident line"
+  [ "$(fm_compact_decide 2 140000)" = 'signal' ] || fail "two compactions signal the branch leader"
+  [ "$(fm_compact_decide 5 140000)" = 'signal' ] || fail "more than two still signal"
+  [ "$(fm_compact_decide 2 0)" = 'silent' ] || fail "zero budget is silent: the gate is the budget"
+  [ "$(fm_compact_decide 2 '')" = 'silent' ] || fail "absent budget is silent"
+  [ "$(fm_compact_decide x 140000)" = 'silent' ] || fail "junk count must not fabricate a compaction"
+  [ "$(fm_compact_decide 02 140000)" = 'signal' ] || fail "zero-padded count still signals"
   pass "decision matrix: silent/incident/signal, gated on the budget, never evadable by junk"
 }
 
@@ -245,6 +262,14 @@ test_boundary_count_and_peak() {
     || fail "a never-compacted transcript scans 0 boundaries and its largest non-sidechain row"
   [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/malformed.jsonl")" ] || fail "an unparseable transcript scans empty"
   [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/missing.jsonl")" ] || fail "a missing transcript scans empty"
+  # A hand-run /compact ends the head - so the peak is still read from after
+  # it - but it is not the head filling up, so it is not counted.
+  make_manual_compact_transcript "$TMP_ROOT/boundary/manual.jsonl"
+  [ "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/manual.jsonl")" = '0 7000' ] \
+    || fail "a manual trim must not count, and the peak must still come from after it, got: $(fm_compact_scan_transcript "$TMP_ROOT/boundary/manual.jsonl")"
+  make_boundary_last_transcript "$TMP_ROOT/boundary/tail.jsonl"
+  [ "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/tail.jsonl")" = '1 0' ] \
+    || fail "a readable transcript ending at its boundary scans a real count and peak 0"
   [ "$(fm_compact_peak_from_transcript "$TMP_ROOT/boundary/missing.jsonl")" = '0' ] || fail "missing transcript peaks 0"
   pass "count comes from the transcript's boundaries and the peak from after the last one"
 }
@@ -310,7 +335,7 @@ test_spine_never_writes_the_status_log() {
   # writes the first compaction's boundary row into the transcript between
   # fires; simulate that, since the count reads it.
   printf '%s %s %s\n' "$(( $(date +%s) - 60 ))" 1 "$SPINE_SESSION" > "$home/state/.$id.compact-fire"
-  printf '{"type":"system","subtype":"compact_boundary"}\n' | cat - "$transcript" > "$transcript.new" && mv "$transcript.new" "$transcript"
+  printf '{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}\n' | cat - "$transcript" > "$transcript.new" && mv "$transcript.new" "$transcript"
   compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
   [ "$(cat "$home/state/$id.status")" = "$before" ] || fail "even a second compaction must not write the status log"
   grep -q '^compacted 2 at ' "$home/state/$id.compactions" || fail "the second fire still appends to its own ledger"
@@ -332,7 +357,7 @@ test_spine_second_compaction_signals_not_stops() {
   # first compaction's boundary row into the transcript between fires; the
   # count reads it.
   printf '%s %s %s\n' "$(( $(date +%s) - 60 ))" 1 "$SPINE_SESSION" > "$home/state/.$id.compact-fire"
-  printf '{"type":"system","subtype":"compact_boundary"}\n' | cat - "$transcript" > "$transcript.new" && mv "$transcript.new" "$transcript"
+  printf '{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}\n' | cat - "$transcript" > "$transcript.new" && mv "$transcript.new" "$transcript"
 
   out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
   expect_code 0 $? "second compaction must exit 0"
@@ -631,6 +656,51 @@ test_spine_incident_names_a_budget_only_when_a_human_wrote_one() {
   pass "the incident names a briefed budget exactly when the brief carried one"
 }
 
+test_spine_does_not_count_a_hand_run_compact() {
+  # The worker tidied its own head with /compact, then genuinely filled up.
+  # The automatic trim is the story's FIRST: an incident, and nobody woken.
+  local rec home id out ledger transcript learnings
+  rec=$(make_story spine-manual 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  ledger="$home/state/$id.compactions"
+  learnings="$home/data/learnings.md"
+  home_wake_state="$home/state"
+  transcript="$TMP_ROOT/spine-manual/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  make_manual_compact_transcript "$transcript"
+
+  out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  expect_code 0 $? "the fire after a hand-run trim must exit 0"
+  grep -q '^compacted 1 at 7000$' "$ledger" \
+    || fail "a hand-run /compact must not push the story's count, ledger: $(cat "$ledger")"
+  assert_contains "$out" 'Compactions so far: 1' 'the spine must report only counted trims'
+  [ -z "$(wake_rows signal)" ] || fail "a hand-run trim must never make the branch leader steer or split the story"
+  [ "$(grep -c 'compacted once' "$learnings")" = '1' ] || fail "the first automatic trim is still the incident"
+  pass "a hand-run /compact reprints the spine but never counts toward the story's trims"
+}
+
+test_spine_tells_the_truth_about_an_unknown_peak() {
+  # Peak 0 has two different causes and the worker is told which one it was.
+  local rec home id out transcript
+  rec=$(make_story spine-peak-truth 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  transcript="$TMP_ROOT/spine-peak-truth/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  make_boundary_last_transcript "$transcript"
+
+  out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  expect_code 0 $? "a readable transcript with no post-boundary usage row must exit 0"
+  assert_contains "$out" 'readable but carried no usage rows' 'needle missing'
+  [ "$(printf '%s' "$out" | grep -c 'not readable at compaction time')" = '0' ] \
+    || fail "a transcript that WAS read must not be reported unreadable, got: $out"
+
+  # A different session, so this is a new event rather than the duplicate
+  # delivery the dedup marker exists to swallow.
+  out=$(compact_payload "$SPINE_SESSION-relaunched" "$TMP_ROOT/spine-peak-truth/gone.jsonl" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  assert_contains "$out" 'not readable at compaction time' 'needle missing'
+  pass "peak 0 says which of its two causes happened: unreadable, or read with nothing after the boundary"
+}
+
 # --- spawn wiring -------------------------------------------------------------
 
 make_spawn_case() {  # <name> <id>
@@ -700,6 +770,36 @@ test_spawn_writes_window_meta_and_spine_only() {
   pass "spawn writes window, budget= meta, and the spine hook only; the generated hook runs on a real scaffold brief"
 }
 
+test_spawn_wires_the_gate_key_for_a_claude_family_harness() {
+  # The raw-launch escape hatch names the harness from the launch command, so a
+  # claude-family worker exists. It gets the window and the spine hook, so it
+  # must get the spine's gate key too - otherwise it trims at 120k and every
+  # compaction is invisible: no spine, no ledger, no signal, and no error.
+  local rec home wt fakebin proj rest id='wired-family' settings out cmd ledger transcript
+  rec=$(make_spawn_case spawn-family "$id")
+  home=${rec%%|*}; rest=${rec#*|}; wt=${rest%%|*}; rest=${rest#*|}; fakebin=${rest%%|*}; proj=${rest#*|}
+  settings="$wt/.claude/settings.local.json"
+
+  out=$(GROK_HOME="$home/grok-home" fm_test_run_spawn "$home" "$wt" "$fakebin" \
+    "$id" "$proj" "claude-wrapper --flag" --mode no-mistakes --yolo off)
+  expect_code 0 $? "a claude-family spawn should succeed: $out"
+  jq -e '.autoCompactWindow' "$settings" >/dev/null || fail "a claude-family worker must get the compaction window"
+  jq -e '.hooks.SessionStart[0].matcher == "compact"' "$settings" >/dev/null \
+    || fail "a claude-family worker must get the spine hook"
+  [ "$(fm_compact_budget_from_meta "$home/state/$id.meta")" = "$FM_COMPACT_TRIGGER_TOKENS" ] \
+    || fail "the gate key must exist wherever the spine is wired, meta: $(cat "$home/state/$id.meta")"
+
+  # Drive it: the wired hook must actually open its gate on this worker.
+  transcript="$TMP_ROOT/spawn-family/transcript.jsonl"
+  make_transcript "$transcript"
+  ledger="$home/state/$id.compactions"
+  cmd=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$settings")
+  out=$(compact_payload "$SPINE_SESSION" "$transcript" "$wt" | sh -c "$cmd")
+  grep -q '^compacted 1 at 5000$' "$ledger" \
+    || fail "the claude-family worker's compaction must be recorded, ledger: $(cat "$ledger" 2>/dev/null)"
+  pass "a claude-family harness gets the window, the spine hook and the gate key together"
+}
+
 test_spawn_refuses_a_nonnumeric_window() {
   # The window is environment-overridable and is written verbatim into the
   # worker's settings.local.json. A junk value must stop the spawn, never
@@ -764,7 +864,10 @@ test_spine_dedup_without_a_transcript
 test_spine_count_never_regresses_below_the_ledger
 test_spine_dedup_survives_a_slow_transcript_read
 test_spine_incident_names_a_budget_only_when_a_human_wrote_one
+test_spine_does_not_count_a_hand_run_compact
+test_spine_tells_the_truth_about_an_unknown_peak
 test_spawn_writes_window_meta_and_spine_only
+test_spawn_wires_the_gate_key_for_a_claude_family_harness
 test_spawn_refuses_a_nonnumeric_window
 test_shared_settings_compact_entry_runs
 test_scripts_are_shellcheck_clean
