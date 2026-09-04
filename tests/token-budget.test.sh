@@ -216,6 +216,9 @@ test_boundary_count_and_peak() {
   [ "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/empty.jsonl")" = '0' ] || fail "no boundaries counts 0"
   [ "$(fm_compact_peak_from_transcript "$TMP_ROOT/boundary/empty.jsonl")" = '0' ] || fail "no usage rows peak 0"
   [ -z "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/missing.jsonl")" ] || fail "missing transcript yields no count (caller falls back to the ledger)"
+  printf 'not json at all\n{"type":"system","subtype":"compact_bound\n' > "$TMP_ROOT/boundary/malformed.jsonl"
+  [ -z "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/malformed.jsonl")" ] \
+    || fail "an unparseable transcript must yield no count, not 0: got $(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/malformed.jsonl")"
   [ "$(fm_compact_peak_from_transcript "$TMP_ROOT/boundary/missing.jsonl")" = '0' ] || fail "missing transcript peaks 0"
   pass "count comes from the transcript's boundaries and the peak from after the last one"
 }
@@ -435,6 +438,84 @@ test_spine_missing_transcript_reads_zero_peak() {
   pass "a missing or lagging transcript compacts to peak 0 and says so"
 }
 
+test_spine_count_survives_a_relaunch() {
+  # A relaunch starts a brand-new claude session, so the story's earlier
+  # compactions are nowhere in the new transcript. The ledger is the story's
+  # memory and must hold the count up: the third compaction of the story is
+  # counted as the third and signals the branch leader, not a repeat first.
+  local rec home id out ledger transcript wake
+  rec=$(make_story spine-relaunch 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  ledger="$home/state/$id.compactions"
+  home_wake_state="$home/state"
+  printf 'compacted 1 at 118000\ncompacted 2 at 121000\n' > "$ledger"
+  # The fresh session's transcript: readable, and with ZERO boundary rows.
+  transcript="$TMP_ROOT/spine-relaunch/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  make_transcript "$transcript"
+  [ "$(fm_compact_count_from_boundaries "$transcript")" = '0' ] || fail "the relaunched session's transcript must carry no boundaries"
+
+  out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  expect_code 0 $? "a relaunched worker's compaction must exit 0"
+  grep -q '^compacted 3 at 5000$' "$ledger" \
+    || fail "the ledger's two earlier fires plus this one must count 3, ledger: $(cat "$ledger")"
+  assert_contains "$out" '3 times' 'needle missing'
+  wake=$(wake_rows signal)
+  [ -n "$wake" ] || fail "a relaunched worker's third compaction must still signal the branch leader"
+  assert_contains "$wake" '3 times' 'needle missing'
+  [ ! -e "$home/data/learnings.md" ] || fail "a third compaction must not write a fresh 'compacted once' incident: $(cat "$home/data/learnings.md")"
+  pass "the count is the story's, not the session's: a relaunch still counts and signals"
+}
+
+test_spine_unparseable_transcript_falls_back_to_the_ledger() {
+  # A half-written or corrupt transcript is unreadable, not a story that never
+  # compacted: the ledger's memory is the count, so the signal still fires.
+  local rec home id out ledger transcript wake
+  rec=$(make_story spine-badjson 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  ledger="$home/state/$id.compactions"
+  home_wake_state="$home/state"
+  printf 'compacted 1 at 118000\ncompacted 2 at 121000\n' > "$ledger"
+  transcript="$TMP_ROOT/spine-badjson/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  printf 'not json at all\n{"type":"system","subtype":"compact_bound\n' > "$transcript"
+
+  out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  expect_code 0 $? "an unparseable transcript must exit 0"
+  grep -q '^compacted 3 at 0$' "$ledger" \
+    || fail "an unparseable transcript must count from the ledger and peak 0, ledger: $(cat "$ledger")"
+  wake=$(wake_rows signal)
+  assert_contains "$wake" '3 times' 'needle missing'
+  assert_contains "$out" 'carry straight on' 'needle missing'
+  pass "an unparseable transcript falls back to the ledger instead of counting a first compaction"
+}
+
+test_spine_dedup_without_a_transcript() {
+  # The live case: no readable transcript, so both settings-layer fires of ONE
+  # compaction count from the ledger - which the first fire has already grown.
+  # The same session inside the dedup window is the same event, whatever the
+  # count says.
+  local rec home id out1 out2 rc2 ledger learnings
+  rec=$(make_story spine-dedup-notranscript 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  ledger="$home/state/$id.compactions"
+  learnings="$home/data/learnings.md"
+  home_wake_state="$home/state"
+
+  out1=$(compact_payload "$SPINE_SESSION" "$TMP_ROOT/spine-dedup-notranscript/nope.jsonl" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  [ -n "$out1" ] || fail "the first fire must print the spine"
+  grep -q '^compacted 1 at 0$' "$ledger" || fail "the first fire must ledger the compaction, ledger: $(cat "$ledger")"
+
+  out2=$(compact_payload "$SPINE_SESSION" "$TMP_ROOT/spine-dedup-notranscript/nope.jsonl" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  rc2=$?
+  expect_code 0 "$rc2" "the duplicate fire must exit 0"
+  [ -z "$out2" ] || fail "the duplicate fire must print nothing, got: $out2"
+  [ "$(fm_compact_count_from_ledger "$ledger")" = '1' ] || fail "one compaction must be one ledger line, ledger: $(cat "$ledger")"
+  [ "$(grep -c 'compacted once' "$learnings")" = '1' ] || fail "one compaction must be one incident line"
+  [ -z "$(wake_rows signal)" ] || fail "a single compaction must never signal the branch leader"
+  pass "with no readable transcript, one compaction firing twice is still one compaction"
+}
+
 # --- spawn wiring -------------------------------------------------------------
 
 make_spawn_case() {  # <name> <id>
@@ -504,6 +585,25 @@ test_spawn_writes_window_meta_and_spine_only() {
   pass "spawn writes window, budget= meta, and the spine hook only; the generated hook runs on a real scaffold brief"
 }
 
+test_spawn_refuses_a_nonnumeric_window() {
+  # The window is environment-overridable and is written verbatim into the
+  # worker's settings.local.json. A junk value must stop the spawn, never
+  # produce a settings file the harness cannot parse (which would disable
+  # every hook in that worker) nor a negative budget in the task record.
+  local rec home wt fakebin proj rest id='wired-bad' out rc
+  rec=$(make_spawn_case spawn-badwindow "$id")
+  home=${rec%%|*}; rest=${rec#*|}; wt=${rest%%|*}; rest=${rest#*|}; fakebin=${rest%%|*}; proj=${rest#*|}
+
+  out=$(FM_COMPACT_WINDOW_TOKENS=not-a-number GROK_HOME="$home/grok-home" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --mode no-mistakes --yolo off)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a non-numeric window must refuse the spawn, output: $out"
+  assert_contains "$out" 'FM_COMPACT_WINDOW_TOKENS' 'the refusal must name the setting at fault'
+  [ ! -e "$wt/.claude/settings.local.json" ] || fail "a refused spawn must write no settings: $(cat "$wt/.claude/settings.local.json")"
+  grep -q '^budget=' "$home/state/$id.meta" 2>/dev/null && fail "a refused spawn must write no budget= record"
+  pass "a junk compaction window refuses the spawn instead of writing broken settings"
+}
+
 test_shared_settings_compact_entry_runs() {
   # Drive the tracked shared-settings entry's command rather than grepping
   # its bytes: a command that no longer runs must fail here, not in a worker.
@@ -543,7 +643,11 @@ test_spine_count_survives_a_pre_machinery_history
 test_spine_ignores_other_sources
 test_spine_derive_mode
 test_spine_missing_transcript_reads_zero_peak
+test_spine_count_survives_a_relaunch
+test_spine_unparseable_transcript_falls_back_to_the_ledger
+test_spine_dedup_without_a_transcript
 test_spawn_writes_window_meta_and_spine_only
+test_spawn_refuses_a_nonnumeric_window
 test_shared_settings_compact_entry_runs
 test_scripts_are_shellcheck_clean
 echo "all token-budget tests passed"

@@ -22,12 +22,35 @@
 # .claude/settings.local.json, so a worker's head compacts at ~120k.
 FM_COMPACT_WINDOW_TOKENS=${FM_COMPACT_WINDOW_TOKENS:-153000}
 FM_COMPACT_BUFFER_TOKENS=${FM_COMPACT_BUFFER_TOKENS:-33000}
-FM_COMPACT_TRIGGER_TOKENS=$((FM_COMPACT_WINDOW_TOKENS - FM_COMPACT_BUFFER_TOKENS))
-# Consumed by bin/fm-spawn.sh when it writes the task record's budget= field.
+
+# fm_compact_is_positive_int <value>
+# True only for a bare positive decimal integer. Both token settings are read
+# from the environment and then land verbatim in a worker's
+# settings.local.json and in its task record, so anything else has to be
+# refused by the caller rather than arithmetic-expanded or interpolated.
+fm_compact_is_positive_int() {
+  case ${1:-} in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -gt 0 ] 2>/dev/null
+}
+
+# The measured trigger, consumed by bin/fm-spawn.sh when it writes the task
+# record's budget= field. Empty when either setting is not a positive integer
+# or the buffer is not smaller than the window: a budget that is absent closes
+# the gate honestly, and bin/fm-spawn.sh refuses the spawn outright rather
+# than writing a nonsense window or a negative budget.
+if fm_compact_is_positive_int "$FM_COMPACT_WINDOW_TOKENS" \
+  && fm_compact_is_positive_int "$FM_COMPACT_BUFFER_TOKENS" \
+  && [ "$FM_COMPACT_WINDOW_TOKENS" -gt "$FM_COMPACT_BUFFER_TOKENS" ]; then
+  FM_COMPACT_TRIGGER_TOKENS=$((FM_COMPACT_WINDOW_TOKENS - FM_COMPACT_BUFFER_TOKENS))
+else
+  FM_COMPACT_TRIGGER_TOKENS=""
+fi
 export FM_COMPACT_TRIGGER_TOKENS
 # A genuine second compaction must regrow ~120k tokens of context first, so a
-# duplicate delivery of the SAME compaction event is any re-fire within this
-# many seconds that also claims the same count from the same session.
+# duplicate delivery of the SAME compaction event is any re-fire from the same
+# session within this many seconds.
 FM_COMPACT_DEDUP_WINDOW=${FM_COMPACT_DEDUP_WINDOW:-15}
 
 # fm_compact_budget_from_brief <brief>
@@ -102,8 +125,9 @@ fm_compact_signal_message() {
 
 # fm_compact_count_from_ledger <ledger>
 # Fires this machinery itself recorded, one `compacted <n> at <largest>` line
-# per event. The fallback count for a transcript that cannot be read; the
-# transcript's boundary rows are the primary count (see below).
+# per event, in ANY session of the story. The story-level floor under the
+# current session's boundary count (see below), and the whole count when the
+# transcript cannot be read.
 fm_compact_count_from_ledger() {
   local n
   n=$(grep -cE '^compacted [0-9]+ at [0-9]+$' "$1" 2>/dev/null)
@@ -115,12 +139,17 @@ fm_compact_count_from_ledger() {
 # own type:"system" subtype:"compact_boundary" rows. Every compaction writes
 # one whether or not this machinery was installed when it happened, so the
 # count stays true across sessions that ran before the gate opened or through
-# a missed fire. Prints nothing (empty) when the transcript cannot be read;
-# the caller falls back to the ledger.
+# a missed fire. Prints nothing (empty) when the transcript is missing or
+# cannot be parsed; the caller falls back to the ledger.
 fm_compact_count_from_boundaries() {
   [ -n "$1" ] && [ -f "$1" ] || return 0
-  local n
-  n=$(jq -r 'select(.type == "system" and .subtype == "compact_boundary") | 1' "$1" 2>/dev/null | grep -c .)
+  local rows rc n
+  rows=$(jq -r 'select(.type == "system" and .subtype == "compact_boundary") | 1' "$1" 2>/dev/null)
+  rc=$?
+  # A malformed or half-written transcript is unreadable, not a session that
+  # never compacted: print nothing so the caller keeps the ledger's count.
+  [ "$rc" -eq 0 ] || return 0
+  n=$(printf '%s' "$rows" | grep -c .) || true
   printf '%s\n' "${n:-0}"
 }
 

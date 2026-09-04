@@ -36,11 +36,13 @@
 #                             the worker itself is NOT stopped or slowed
 #   state/.<id>.compact-fire  = "<epoch> <n> <session>" duplicate-fire marker
 #
-# The count comes from the transcript's own type:"system"
-# subtype:"compact_boundary" rows plus one for the compaction that just
-# fired, so it stays true even when earlier compactions ran before this
-# machinery was installed or through a missed fire. When the transcript is
-# unreadable, the ledger count plus one is the fallback.
+# The count is the STORY's, not the session's: the larger of the transcript's
+# own type:"system" subtype:"compact_boundary" rows and the ledger's recorded
+# fires, plus one for the compaction that just fired. The boundaries carry
+# compactions that ran before this machinery was installed or through a missed
+# fire; the ledger carries the story's earlier sessions, which a relaunch
+# leaves out of a brand-new transcript. When the transcript is missing or
+# unparseable, the ledger count plus one is the whole answer.
 #
 # `peak` is the context of THIS compaction: the largest usage row after the
 # transcript's last boundary row (bin/fm-compact-lib.sh owns the reading). A
@@ -50,10 +52,9 @@
 # Duplicate-fire dedup: one compaction event can reach this hook twice because
 # the tracked settings entry and the spawn-written entry merge into one
 # session and their command strings differ. A fire is skipped when the marker
-# shows the same session already appended this exact ledger count within
-# FM_COMPACT_DEDUP_WINDOW seconds (see bin/fm-compact-lib.sh). A genuine second
-# compaction cannot land inside that window: it must regrow ~120k tokens of
-# context first.
+# shows the same session already appended within FM_COMPACT_DEDUP_WINDOW
+# seconds (see bin/fm-compact-lib.sh). A genuine second compaction cannot land
+# inside that window: it must regrow ~120k tokens of context first.
 #
 # Output: the spine on stdout (injected as context), exit 0 always. A
 # SessionStart exit 2 would not block the session anyway - every failure here
@@ -163,26 +164,31 @@ if ! fm_compact_acquire_lock "$LOCK"; then
   silent_exit
 fi
 
-# Count from the transcript's own boundaries when it can be read: boundaries
-# recorded before this fire, plus one for the compaction that just happened.
-# Every earlier head's compaction is counted whether or not this machinery
-# was installed when it fired.
+# The story's count, not this session's: the larger of the boundaries this
+# session's transcript records and the fires the ledger recorded across every
+# session of the story, plus one for the compaction that just happened. The
+# two sources overlap on the same events, so the larger is the true history -
+# and a relaunched worker, whose fresh transcript has no boundaries at all,
+# still counts its story's earlier compactions.
 BOUNDARIES=$(fm_compact_count_from_boundaries "$TRANSCRIPT")
-if [ -n "$BOUNDARIES" ]; then
+LEDGER_COUNT=$(fm_compact_count_from_ledger "$LEDGER")
+case $LEDGER_COUNT in '' | *[!0-9]*) LEDGER_COUNT=0 ;; esac
+if [ -n "$BOUNDARIES" ] && [ "$BOUNDARIES" -gt "$LEDGER_COUNT" ]; then
   N=$((BOUNDARIES + 1))
 else
-  LEDGER_COUNT=$(fm_compact_count_from_ledger "$LEDGER")
   N=$((LEDGER_COUNT + 1))
 fi
 NOW=$(date +%s)
 
-# Duplicate fire of the event this session already appended (see header).
+# Duplicate fire of the event this session already appended (see header). The
+# recorded count is kept for the record but is NOT part of the test: the
+# ledger grows between the two fires of one event, so the second fire's count
+# legitimately differs from the first's.
 if [ -f "$MARKER" ]; then
   MARKER_EPOCH=$(awk '{print $1}' "$MARKER" 2>/dev/null)
-  MARKER_N=$(awk '{print $2}' "$MARKER" 2>/dev/null)
   MARKER_SESSION=$(awk '{print $3}' "$MARKER" 2>/dev/null)
   case $MARKER_EPOCH in '' | *[!0-9]*) MARKER_EPOCH=0 ;; esac
-  if [ "$MARKER_SESSION" = "$SESSION" ] && [ "$MARKER_N" = "$N" ] \
+  if [ "$MARKER_SESSION" = "$SESSION" ] \
     && [ "$((NOW - MARKER_EPOCH))" -lt "$FM_COMPACT_DEDUP_WINDOW" ]; then
     fm_compact_release_lock "$LOCK"
     silent_exit

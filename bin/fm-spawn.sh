@@ -315,6 +315,14 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-compact-lib.sh
 . "$SCRIPT_DIR/fm-compact-lib.sh"
+# Both compaction settings are environment-overridable and land verbatim in the
+# worker's settings.local.json and its task record. A bad value must be a
+# refusal here, never a settings file that fails to parse (which would silently
+# disable EVERY hook in that worker) and never a negative budget.
+if [ -z "$FM_COMPACT_TRIGGER_TOKENS" ]; then
+  echo "error: spawn refused: FM_COMPACT_WINDOW_TOKENS and FM_COMPACT_BUFFER_TOKENS must be positive integers with the window larger than the buffer (window='$FM_COMPACT_WINDOW_TOKENS', buffer='$FM_COMPACT_BUFFER_TOKENS')" >&2
+  exit 1
+fi
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
