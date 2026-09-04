@@ -232,6 +232,14 @@
 # success line and state/<id>.meta omit them.
 # Every fresh spawn or relaunch records a new spawn_gen= incarnation token so durable
 # consumers can distinguish a replacement worker that reuses the same task id.
+# Every record also carries launch=<the launch line as given>: the harness template
+# with its placeholders, or the raw launch line, with every NAME=value word whose
+# name looks like a credential (KEY, TOKEN, SECRET, PASSWORD, PASSWD, AUTH,
+# CREDENTIAL) redacted, because the record is printed into every session-start
+# digest. A claude task's worktree hooks also carry a SessionStart entry (matcher
+# startup|resume|clear|fork, never compact) that appends the harness's real
+# session id, transcript path, model, and effort to data/<id>/sessions.log
+# through bin/fm-session-event.sh, whose header owns the record format.
 # When the home session's frozen trace-context decision is enabled (see
 # docs/configuration.md and bin/fm-trace-context-lib.sh), the meta also records
 # one W3C traceparent= carrier, the same value injected into the pane as
@@ -890,6 +898,7 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            echo "launch=$(launch_record_line "${LAUNCH:-}")"
             [ -z "${LEADER_ARG:-}" ] || echo "leader=$LEADER_ARG"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
@@ -1697,6 +1706,28 @@ esac
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# launch_record_line <launch-line>: the launch line as given, made safe to
+# record. Whitespace collapses to single spaces so the value stays one meta
+# line, and every NAME=value word whose NAME contains KEY, TOKEN, SECRET,
+# PASSWORD, PASSWD, AUTH, or CREDENTIAL (any case) has its value replaced by
+# <redacted>, up to the next whitespace. The meta is printed into every
+# session-start digest, so a credential in a raw launch line must never reach
+# it (the same leak the captain accepted once and no more).
+launch_record_line() {
+  printf '%s\n' "$1" | tr '\n\r\t' '   ' | awk '{
+    out = ""
+    for (i = 1; i <= NF; i++) {
+      w = $i
+      if (match(w, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+        name = substr(w, 1, RLENGTH - 1)
+        if (toupper(name) ~ /KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL/) w = name "=<redacted>"
+      }
+      out = (i == 1) ? w : out " " w
+    }
+    print out
+  }'
 }
 
 resolved_existing_dir() {
@@ -2680,6 +2711,10 @@ mkdir -p "$TASK_TMP/gotmp"
 # check or leak into a commit.
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
+# The session-record hook (bin/fm-session-event.sh) runs from the pane with no
+# environment, so it gets the physical data path; a home whose data directory
+# cannot be resolved keeps the logical path rather than failing the launch.
+DATA_REAL=$(cd "$DATA" 2>/dev/null && pwd -P) || DATA_REAL=$DATA
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
@@ -2767,8 +2802,14 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
+      # Session record (bin/fm-session-event.sh): every source that begins a
+      # transcript appends the real session id, transcript path, model, and
+      # effort to data/<id>/sessions.log; compact keeps the same transcript and
+      # is deliberately not matched. The command prints nothing, because a
+      # SessionStart hook's stdout enters the crewmate's context.
+      j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-session-event.sh") $(shell_quote "$DATA_REAL") $(shell_quote "$ID") 2>/dev/null || true")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
@@ -3083,7 +3124,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort launch busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3101,6 +3142,10 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # launch= is the launch line as given (harness template with its placeholders,
+  # or the raw line), credentials redacted (launch_record_line); the per-session
+  # truth the harness reports lands in data/<id>/sessions.log.
+  echo "launch=$(launch_record_line "$LAUNCH")"
   # leader= is written only for a --leader spawn; a relaunch keeps the recorded
   # line through preserve_relaunch_meta because leader is not an owned key.
   [ -z "$LEADER_ARG" ] || echo "leader=$LEADER_ARG"

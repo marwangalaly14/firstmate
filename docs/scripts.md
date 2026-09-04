@@ -109,6 +109,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-wake-lib.sh`         | Shared durable wake queue, recovery generations, portable locks, and watcher identity/health helpers |
 | `fm-classify-lib.sh`     | Shared wake classification, durable keyed-decision folds and scans, unread status selection, and bounded latest-event snapshots |
 | `fm-send.sh`             | Steer a task via a durable inbox record plus doorbell, or send a supported key or typed harness invocation through the recorded backend |
+| `fm-session-event.sh`    | Append a claude task's real session id, transcript path, model, and effort to `data/<id>/sessions.log` from its SessionStart hook |
 | `fm-lead.sh`             | The branch leader's view of its own crewmates: `crew` lists the tasks recorded under a leader with the digest's cheap endpoint read |
 | `fm-lead-lib.sh`         | One owner of the branch-leader chain (`leader=` in task meta), who may lead, and the four-crewmate ceiling the spawn enforces |
 | `fm-branch-prompt.sh`    | Emit the Pi supervision branch's byte-stable system prompt ([pi-supervision-branch.md](pi-supervision-branch.md)) |
