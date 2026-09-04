@@ -31,10 +31,14 @@
 #                             in its OWN file - the status log is the wake
 #                             channel and its last line is read as current
 #                             state, so this hook never writes there)
-#   n = 1: data/learnings.md += one incident line naming story, peak, budget
+#   n = 1: data/learnings.md += one incident line naming story and peak, and
+#                             the briefed budget only when the brief carried a
+#                             human-written `Budget:` line
 #   n >= 2: state/.wake-queue += one `signal` wake for the branch leader;
 #                             the worker itself is NOT stopped or slowed
-#   state/.<id>.compact-fire  = "<epoch> <n> <session>" duplicate-fire marker
+#   state/.<id>.compact-fire  = "<epoch> <n> <session>" duplicate-fire marker,
+#                             stamped when the append FINISHED so a slow
+#                             transcript read cannot age it out of the window
 #
 # The count is the STORY's, not the session's: the larger of the transcript's
 # own type:"system" subtype:"compact_boundary" rows and the ledger's recorded
@@ -45,9 +49,11 @@
 # unparseable, the ledger count plus one is the whole answer.
 #
 # `peak` is the context of THIS compaction: the largest usage row after the
-# transcript's last boundary row (bin/fm-compact-lib.sh owns the reading). A
-# missing, lagging, or unreadable transcript reads as peak 0 and says so
-# rather than fabricating a number.
+# transcript's last boundary row. Both it and the boundary count come from ONE
+# pass over the transcript (bin/fm-compact-lib.sh owns the reading), which the
+# hook's 60s budget needs against a multi-megabyte file. A missing, lagging, or
+# unreadable transcript reads as peak 0 and says so rather than fabricating a
+# number.
 #
 # Duplicate-fire dedup: one compaction event can reach this hook twice because
 # the tracked settings entry and the spawn-written entry merge into one
@@ -123,7 +129,8 @@ fi
 BRIEF="$FM_HOME/data/$FM_ID/brief.md"
 # The brief line wins when a human wrote one; the spawn-written meta record is
 # the normal gate key. Neither means the gate stays closed.
-BUDGET=$(fm_compact_budget_from_brief "$BRIEF")
+BRIEFED_BUDGET=$(fm_compact_budget_from_brief "$BRIEF")
+BUDGET=$BRIEFED_BUDGET
 if [ -z "$BUDGET" ]; then
   BUDGET=$(fm_compact_budget_from_meta "$FM_HOME/state/$FM_ID.meta")
 fi
@@ -170,7 +177,15 @@ fi
 # two sources overlap on the same events, so the larger is the true history -
 # and a relaunched worker, whose fresh transcript has no boundaries at all,
 # still counts its story's earlier compactions.
-BOUNDARIES=$(fm_compact_count_from_boundaries "$TRANSCRIPT")
+SCAN=$(fm_compact_scan_transcript "$TRANSCRIPT")
+BOUNDARIES=""
+PEAK=0
+if [ -n "$SCAN" ]; then
+  BOUNDARIES=${SCAN%% *}
+  PEAK=${SCAN##* }
+fi
+case $BOUNDARIES in *[!0-9]*) BOUNDARIES="" ;; esac
+case $PEAK in '' | *[!0-9]*) PEAK=0 ;; esac
 LEDGER_COUNT=$(fm_compact_count_from_ledger "$LEDGER")
 case $LEDGER_COUNT in '' | *[!0-9]*) LEDGER_COUNT=0 ;; esac
 if [ -n "$BOUNDARIES" ] && [ "$BOUNDARIES" -gt "$LEDGER_COUNT" ]; then
@@ -178,6 +193,8 @@ if [ -n "$BOUNDARIES" ] && [ "$BOUNDARIES" -gt "$LEDGER_COUNT" ]; then
 else
   N=$((LEDGER_COUNT + 1))
 fi
+# Read after the transcript scan, so the dedup window is measured from now and
+# not from before a read that can take seconds on a large transcript.
 NOW=$(date +%s)
 
 # Duplicate fire of the event this session already appended (see header). The
@@ -195,16 +212,20 @@ if [ -f "$MARKER" ]; then
   fi
 fi
 
-PEAK=$(fm_compact_peak_from_transcript "$TRANSCRIPT")
-case $PEAK in '' | *[!0-9]*) PEAK=0 ;; esac
-
 printf 'compacted %s at %s\n' "$N" "$PEAK" >> "$LEDGER"
 
 DECIDE=$(fm_compact_decide "$PEAK" "$N" "$BUDGET")
 
 if [ "$DECIDE" = incident ]; then
-  printf -- '- %s - %s\n' "$(date +%F)" \
-    "\`$FM_ID\` compacted once (peak $PEAK tokens) on a story briefed at $BUDGET tokens." >> "$LEARNINGS"
+  # The briefed-at clause is written ONLY when a human put a Budget line in the
+  # brief. On the machine record's path the incident says what is true and
+  # stops: the trigger a worker compacts AT is not a briefing.
+  if [ -n "$BRIEFED_BUDGET" ]; then
+    INCIDENT="\`$FM_ID\` compacted once (peak $PEAK tokens) on a story briefed at $BRIEFED_BUDGET tokens."
+  else
+    INCIDENT="\`$FM_ID\` compacted once (peak $PEAK tokens)."
+  fi
+  printf -- '- %s - %s\n' "$(date +%F)" "$INCIDENT" >> "$LEARNINGS"
 elif [ "$DECIDE" = signal ]; then
   # The worker carries straight on. The branch leader is the one told: a
   # durable signal wake the supervising actor drains, with the one short
@@ -215,10 +236,10 @@ elif [ "$DECIDE" = signal ]; then
   # A failed signal must never fail the spine: the worker's carry-on is the
   # contract, and the wake queue stays the leader's best-effort channel.
   fm_wake_append signal "$FM_ID" \
-    "$(fm_compact_signal_message "$FM_ID" "$N" "$PEAK" "$BUDGET")" >/dev/null 2>&1 || true
+    "$(fm_compact_signal_message "$FM_ID" "$N" "$PEAK" "$BRIEFED_BUDGET")" >/dev/null 2>&1 || true
 fi
 
-printf '%s %s %s\n' "$NOW" "$N" "$SESSION" > "$MARKER"
+printf '%s %s %s\n' "$(date +%s)" "$N" "$SESSION" > "$MARKER"
 fm_compact_release_lock "$LOCK"
 
 # --- the spine, from disk -----------------------------------------------------

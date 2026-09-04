@@ -110,17 +110,23 @@ fm_compact_decide() {
   fi
 }
 
-# fm_compact_signal_message <id> <count> <largest> <budget>
+# fm_compact_signal_message <id> <count> <largest> [budget]
 # The one short line the branch leader is told: which worker compacted, how
-# often, on what budget, and what steering decision that creates.
+# often, and what steering decision that creates. The budget clause is printed
+# ONLY for a budget a human wrote into the brief. The machine trigger is never
+# named here: a worker compacts AT the trigger, so measuring its peak against
+# it says nothing while reading as though it did.
 fm_compact_signal_message() {
-  local id=$1 count=$2 largest=$3 budget=$4 times
+  local id=$1 count=$2 largest=$3 budget=${4:-} times against=""
   case $count in
     2) times=twice ;;
     *) times="$count times" ;;
   esac
-  printf '%s compacted %s (peak %s tokens against a %s-token budget) - steer or split the story' \
-    "$id" "$times" "$largest" "$budget"
+  if [ -n "$budget" ]; then
+    against=" against a $budget-token budget"
+  fi
+  printf '%s compacted %s (peak %s tokens%s) - steer or split the story' \
+    "$id" "$times" "$largest" "$against"
 }
 
 # fm_compact_count_from_ledger <ledger>
@@ -128,55 +134,85 @@ fm_compact_signal_message() {
 # per event, in ANY session of the story. The story-level floor under the
 # current session's boundary count (see below), and the whole count when the
 # transcript cannot be read.
+#
+# The answer is the HIGHEST n the ledger records, not how many lines it holds:
+# a story whose earlier compactions were counted from the transcript writes
+# `compacted 3` as its first line, and reading that file as "one compaction"
+# would report less history than this machinery itself already wrote down. The
+# line count is the fallback for a ledger whose lines do not parse.
 fm_compact_count_from_ledger() {
-  local n
-  n=$(grep -cE '^compacted [0-9]+ at [0-9]+$' "$1" 2>/dev/null)
-  printf '%s\n' "${n:-0}"
+  local highest lines
+  highest=$(sed -nE 's/^compacted ([0-9]+) at [0-9]+$/\1/p' "$1" 2>/dev/null | sort -n | tail -1)
+  case ${highest:-} in
+    '' | *[!0-9]*) ;;
+    *) printf '%s\n' "$highest"; return 0 ;;
+  esac
+  lines=$(grep -cE '^compacted [0-9]+ at [0-9]+$' "$1" 2>/dev/null) || true
+  printf '%s\n' "${lines:-0}"
+}
+
+# fm_compact_scan_transcript <transcript>
+# ONE pass over the transcript, answering both questions the hook has about it:
+# "<boundary-count> <peak>". A worker's transcript at the compaction trigger
+# carries every dropped turn and tool result and is routinely tens of
+# megabytes, while the hook runs inside the harness's 60s budget, so the file
+# is read once and the arithmetic is done on the small stream jq emits.
+#
+#   boundary-count  type:"system" subtype:"compact_boundary" rows. Every
+#                   compaction writes one whether or not this machinery was
+#                   installed when it happened, so the count stays true across
+#                   sessions that ran before the gate opened or a missed fire.
+#   peak            the largest usage row AFTER the last boundary row, because
+#                   the file's all-time maximum belongs to an earlier head once
+#                   the session has compacted before. Sums input + cache_read +
+#                   cache_creation; sidechain rows never count.
+#
+# Prints nothing (empty) when the transcript is missing, or when jq cannot
+# parse it - a malformed or half-written file is unreadable, not a session that
+# never compacted, and the caller must be able to tell those apart.
+fm_compact_scan_transcript() {
+  [ -n "${1:-}" ] && [ -f "$1" ] || return 0
+  local rows rc
+  rows=$(jq -r '
+    if (.type == "system" and .subtype == "compact_boundary") then
+      "b \(input_line_number)"
+    elif ((.isSidechain != true) and ((.message.usage? // null) != null)) then
+      "u \(input_line_number) \(((.message.usage.input_tokens // 0)
+          + (.message.usage.cache_read_input_tokens // 0)
+          + (.message.usage.cache_creation_input_tokens // 0)))"
+    else empty end' "$1" 2>/dev/null)
+  rc=$?
+  [ "$rc" -eq 0 ] || return 0
+  printf '%s\n' "$rows" | awk '
+    $1 == "b" { boundaries++; last = $2 + 0; next }
+    $1 == "u" { line[++rows] = $2 + 0; tokens[rows] = $3 + 0 }
+    END {
+      peak = 0
+      for (i = 1; i <= rows; i++) {
+        if (line[i] > last && tokens[i] > peak) peak = tokens[i]
+      }
+      printf "%d %d\n", boundaries, peak
+    }'
 }
 
 # fm_compact_count_from_boundaries <transcript>
-# How many times this session has compacted, counted from the transcript's
-# own type:"system" subtype:"compact_boundary" rows. Every compaction writes
-# one whether or not this machinery was installed when it happened, so the
-# count stays true across sessions that ran before the gate opened or through
-# a missed fire. Prints nothing (empty) when the transcript is missing or
-# cannot be parsed; the caller falls back to the ledger.
+# The boundary count of one scan (see fm_compact_scan_transcript). Prints
+# nothing when the transcript cannot be read; the caller falls back to the
+# ledger.
 fm_compact_count_from_boundaries() {
-  [ -n "$1" ] && [ -f "$1" ] || return 0
-  local rows rc n
-  rows=$(jq -r 'select(.type == "system" and .subtype == "compact_boundary") | 1' "$1" 2>/dev/null)
-  rc=$?
-  # A malformed or half-written transcript is unreadable, not a session that
-  # never compacted: print nothing so the caller keeps the ledger's count.
-  [ "$rc" -eq 0 ] || return 0
-  n=$(printf '%s' "$rows" | grep -c .) || true
-  printf '%s\n' "${n:-0}"
+  local scan
+  scan=$(fm_compact_scan_transcript "${1:-}")
+  [ -n "$scan" ] || return 0
+  printf '%s\n' "${scan%% *}"
 }
 
 # fm_compact_peak_from_transcript <transcript>
-# The peak context of the compaction that just fired: the largest usage row
-# AFTER the transcript's last compact_boundary, because the file's all-time
-# maximum belongs to an earlier head once the session has compacted before.
-# Sums input + cache_read + cache_creation; sidechain rows are skipped. A
-# missing, lagging, or unreadable transcript - all observed live - reads as
-# peak 0 rather than a fabricated number.
+# The peak of one scan (see fm_compact_scan_transcript). A missing, lagging, or
+# unreadable transcript - all observed live - reads as peak 0 rather than a
+# fabricated number.
 fm_compact_peak_from_transcript() {
-  local path=$1 start peak
-  [ -n "$path" ] && [ -f "$path" ] || { printf '0\n'; return 0; }
-  # input_line_number on a JSONL transcript is exact: find the last boundary
-  # row's line, slice the FILE from after it (so the line numbers align), then
-  # read the usage rows of that slice only.
-  start=$(jq -r 'select(.type == "system" and .subtype == "compact_boundary") | input_line_number' "$path" 2>/dev/null | tail -1)
-  case ${start:-} in '' | *[!0-9]*) start=0 ;; esac
-  if [ "$start" -gt 0 ]; then
-    peak=$(tail -n +"$((start + 1))" -- "$path" \
-      | jq -r 'select(.isSidechain != true) | .message.usage? | select(. != null) |
-               ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' 2>/dev/null \
-      | sort -n | tail -1)
-  else
-    peak=$(jq -r 'select(.isSidechain != true) | .message.usage? | select(. != null) |
-                  ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' \
-            "$path" 2>/dev/null | sort -n | tail -1)
-  fi
-  printf '%s\n' "${peak:-0}"
+  local scan
+  scan=$(fm_compact_scan_transcript "${1:-}")
+  [ -n "$scan" ] || { printf '0\n'; return 0; }
+  printf '%s\n' "${scan##* }"
 }

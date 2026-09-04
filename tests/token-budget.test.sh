@@ -188,7 +188,15 @@ test_signal_message_is_one_short_line() {
   assert_contains "$out" '140000' 'needle missing'
   out=$(fm_compact_signal_message my-story 3 121000 140000)
   assert_contains "$out" '3 times' 'needle missing'
-  pass "the branch leader's signal names the worker, the count, and both numbers in one line"
+  # No human-written budget: the line says what is true and stops. Measuring
+  # the peak against the machine trigger a worker compacts AT says nothing.
+  out=$(fm_compact_signal_message my-story 2 121000 '')
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = '1' ] || fail "the budget-less signal must be one line"
+  assert_contains "$out" 'my-story' 'needle missing'
+  assert_contains "$out" 'twice' 'needle missing'
+  assert_contains "$out" '121000' 'needle missing'
+  [ "$(printf '%s' "$out" | grep -c 'budget')" = '0' ] || fail "with no briefed budget the signal must claim none, got: $out"
+  pass "the signal names the worker, the count and the peak, and a budget only when a human wrote one"
 }
 
 test_ledger_parsers() {
@@ -198,12 +206,21 @@ test_ledger_parsers() {
   printf 'compacted 1 at 118000\n' > "$st/one"
   printf 'compacted 1 at 118000\ncompacted 2 at 121000\n' > "$st/two"
   printf 'compacted 2 at 130000 plus prose\ncompacted 1 at 118000\n' > "$st/near-miss"
+  # A story whose earlier compactions were counted from the transcript writes
+  # its recorded number as the ledger's FIRST line; the file holds one line and
+  # three compactions.
+  printf 'compacted 3 at 8000\n' > "$st/recorded-third"
+  printf 'compacted 3 at 8000\ncompacted 4 at 9000\n' > "$st/recorded-fourth"
   [ "$(fm_compact_count_from_ledger "$st/empty")" = '0' ] || fail "empty ledger counts 0"
   [ "$(fm_compact_count_from_ledger "$st/one")" = '1' ] || fail "one line counts 1"
   [ "$(fm_compact_count_from_ledger "$st/two")" = '2' ] || fail "two lines count 2"
   [ "$(fm_compact_count_from_ledger "$st/near-miss")" = '1' ] || fail "trailing prose is not a ledger line"
   [ "$(fm_compact_count_from_ledger "$st/missing-file")" = '0' ] || fail "missing ledger counts 0"
-  pass "ledger parsers count only exact compacted lines"
+  [ "$(fm_compact_count_from_ledger "$st/recorded-third")" = '3' ] \
+    || fail "a ledger recording a third compaction must count 3, not its one line"
+  [ "$(fm_compact_count_from_ledger "$st/recorded-fourth")" = '4' ] \
+    || fail "the ledger's count is the highest number it recorded"
+  pass "the ledger counts the highest compaction it recorded, never fewer"
 }
 
 test_boundary_count_and_peak() {
@@ -219,6 +236,15 @@ test_boundary_count_and_peak() {
   printf 'not json at all\n{"type":"system","subtype":"compact_bound\n' > "$TMP_ROOT/boundary/malformed.jsonl"
   [ -z "$(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/malformed.jsonl")" ] \
     || fail "an unparseable transcript must yield no count, not 0: got $(fm_compact_count_from_boundaries "$TMP_ROOT/boundary/malformed.jsonl")"
+  # Both answers come from ONE read of the file; the pair must agree with the
+  # fixture exactly as the two separate readings did.
+  [ "$(fm_compact_scan_transcript "$t")" = '2 8000' ] \
+    || fail "one scan must answer both count and peak, got: $(fm_compact_scan_transcript "$t")"
+  make_transcript "$TMP_ROOT/boundary/flat.jsonl"
+  [ "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/flat.jsonl")" = '0 5000' ] \
+    || fail "a never-compacted transcript scans 0 boundaries and its largest non-sidechain row"
+  [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/malformed.jsonl")" ] || fail "an unparseable transcript scans empty"
+  [ -z "$(fm_compact_scan_transcript "$TMP_ROOT/boundary/missing.jsonl")" ] || fail "a missing transcript scans empty"
   [ "$(fm_compact_peak_from_transcript "$TMP_ROOT/boundary/missing.jsonl")" = '0' ] || fail "missing transcript peaks 0"
   pass "count comes from the transcript's boundaries and the peak from after the last one"
 }
@@ -253,7 +279,14 @@ test_spine_first_compaction_on_real_scaffold_brief() {
   [ "$(fm_compact_count_from_ledger "$ledger")" = '1' ] || fail "exactly one ledger line after the first compaction"
   assert_contains "$(cat "$learnings")" "$id"
   assert_contains "$(cat "$learnings")" '5000' 'needle missing'
-  assert_contains "$(cat "$learnings")" "$FM_COMPACT_TRIGGER_TOKENS"
+  # The real scaffold brief carries no Budget line, so the budget came from the
+  # machine record: the durable incident must not claim a briefing that never
+  # happened, nor measure the peak against the trigger it compacted at.
+  [ "$(grep -c "$FM_COMPACT_TRIGGER_TOKENS" "$learnings")" = '0' ] \
+    || fail "the incident must not claim a briefed budget nobody wrote, got: $(cat "$learnings")"
+  [ "$(grep -c 'briefed at' "$learnings")" = '0' ] || fail "no Budget line means no briefed-at claim"
+  grep -q "compacted once (peak 5000 tokens)\.$" "$learnings" \
+    || fail "the incident must read '<id> compacted once (peak <n> tokens).', got: $(cat "$learnings")"
   [ "$(grep -c "compacted once" "$learnings")" = '1' ] || fail "one incident line"
   assert_present "$home/state/.$id.compact-fire" "dedup marker must exist after a fire"
   [ ! -s "$home/state/.wake-queue" ] || fail "the first compaction must wake nobody"
@@ -516,6 +549,88 @@ test_spine_dedup_without_a_transcript() {
   pass "with no readable transcript, one compaction firing twice is still one compaction"
 }
 
+test_spine_count_never_regresses_below_the_ledger() {
+  # The ledger's FIRST line can already read `compacted 3`: a story whose
+  # earlier trims were counted from a transcript records the number, not one
+  # line per fire it happened to witness. The next fire must be the fourth.
+  local rec home id out ledger transcript wake
+  rec=$(make_story spine-monotonic 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  ledger="$home/state/$id.compactions"
+  home_wake_state="$home/state"
+  printf 'compacted 3 at 8000\n' > "$ledger"
+  transcript="$TMP_ROOT/spine-monotonic/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  make_transcript "$transcript"
+
+  out=$(compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id")
+  expect_code 0 $? "the fire must exit 0"
+  grep -q '^compacted 4 at 5000$' "$ledger" \
+    || fail "the count must never drop below what the ledger already recorded, ledger: $(cat "$ledger")"
+  wake=$(wake_rows signal)
+  assert_contains "$wake" '4 times' 'needle missing'
+  assert_contains "$out" '4 times' 'needle missing'
+  [ ! -e "$home/data/learnings.md" ] || fail "a fourth compaction must not write a first-compaction incident"
+  pass "the story count is monotonic: it never reports less history than the ledger holds"
+}
+
+test_spine_dedup_survives_a_slow_transcript_read() {
+  # The live shape of the duplicate fire: the two settings layers deliver the
+  # SAME compaction seconds apart, and the transcript at the trigger is big
+  # enough that reading it is itself slow. The dedup window is measured from
+  # when the append finished, so the second delivery is still swallowed.
+  local rec home id transcript fakedir realjq ledger learnings
+  rec=$(make_story spine-slowread 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  ledger="$home/state/$id.compactions"
+  learnings="$home/data/learnings.md"
+  home_wake_state="$home/state"
+  transcript="$TMP_ROOT/spine-slowread/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  make_transcript "$transcript"
+  realjq=$(command -v jq) || fail "jq must be installed to run this suite"
+  fakedir="$TMP_ROOT/spine-slowread/bin"
+  mkdir -p "$fakedir"
+  # Stand in for the multi-megabyte transcript a worker carries at the
+  # trigger: every read of THIS file costs seconds.
+  cat > "$fakedir/jq" <<EOF
+#!/bin/sh
+for arg in "\$@"; do
+  if [ "\$arg" = "$transcript" ]; then sleep 2; fi
+done
+exec "$realjq" "\$@"
+EOF
+  chmod +x "$fakedir/jq"
+
+  compact_payload "$SPINE_SESSION" "$transcript" "$home" \
+    | PATH="$fakedir:$PATH" FM_COMPACT_DEDUP_WINDOW=3 "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
+  compact_payload "$SPINE_SESSION" "$transcript" "$home" \
+    | PATH="$fakedir:$PATH" FM_COMPACT_DEDUP_WINDOW=3 "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
+
+  [ "$(grep -c '^compacted ' "$ledger")" = '1' ] \
+    || fail "a slow transcript read must not age the marker out of the dedup window, ledger: $(cat "$ledger")"
+  [ "$(grep -c 'compacted once' "$learnings")" = '1' ] || fail "one compaction is one incident line"
+  [ -z "$(wake_rows signal)" ] || fail "a first compaction delivered twice must never signal the branch leader"
+  pass "the dedup window is measured from the append, so a slow transcript read cannot double-count"
+}
+
+test_spine_incident_names_a_budget_only_when_a_human_wrote_one() {
+  # The brief's own Budget line is a human's number, so the durable incident
+  # may name it. (The machine-record path is proven on the real scaffold
+  # brief, where the incident claims no budget at all.)
+  local rec home id transcript learnings
+  rec=$(make_story spine-briefed 'Budget: 140K')
+  home=${rec%|*}; id=${rec#*|}
+  learnings="$home/data/learnings.md"
+  transcript="$TMP_ROOT/spine-briefed/transcript.jsonl"
+  mkdir -p "$(dirname "$transcript")"
+  make_transcript "$transcript"
+  compact_payload "$SPINE_SESSION" "$transcript" "$home" | "$ROOT/bin/fm-compact-spine.sh" --home "$home" --id "$id" >/dev/null
+  grep -q "compacted once (peak 5000 tokens) on a story briefed at 140000 tokens\.$" "$learnings" \
+    || fail "a hand-written Budget line must be named in the incident, got: $(cat "$learnings")"
+  pass "the incident names a briefed budget exactly when the brief carried one"
+}
+
 # --- spawn wiring -------------------------------------------------------------
 
 make_spawn_case() {  # <name> <id>
@@ -646,6 +761,9 @@ test_spine_missing_transcript_reads_zero_peak
 test_spine_count_survives_a_relaunch
 test_spine_unparseable_transcript_falls_back_to_the_ledger
 test_spine_dedup_without_a_transcript
+test_spine_count_never_regresses_below_the_ledger
+test_spine_dedup_survives_a_slow_transcript_read
+test_spine_incident_names_a_budget_only_when_a_human_wrote_one
 test_spawn_writes_window_meta_and_spine_only
 test_spawn_refuses_a_nonnumeric_window
 test_shared_settings_compact_entry_runs
