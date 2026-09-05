@@ -58,10 +58,13 @@
 # FM_HOME must be explicit, exactly as for bin/fm-send.sh: a leader's view must
 # never silently resolve against another home. FM_STATE_OVERRIDE points the
 # state directory elsewhere for tests (crew only; steer and trim write through
-# fm-send, which reads FM_HOME/state).
-# Reads: state/<id>.meta, data/<crewmate>/trims/index. Writes: the crewmate's
-# inbox and pane through fm-send, state/<leader>.status,
-# data/<leader>/steers/index, data/<crewmate>/trims/index.
+# fm-send, which reads FM_HOME/state); FM_DATA_OVERRIDE points the data
+# directory elsewhere, resolved here exactly as every reader of these ledgers
+# resolves it, so a writer and its reader can never disagree about where a
+# leader's order was written.
+# Reads: state/<id>.meta. Writes: the crewmate's inbox and pane through
+# fm-send, state/<leader>.status, data/<leader>/steers/index,
+# data/<crewmate>/trims/index (appended to, never read back).
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,6 +82,7 @@ if [ -z "${FM_HOME+x}" ] || [ -z "${FM_HOME:-}" ]; then
   exit 1
 fi
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 if [ ! -d "$FM_HOME" ]; then
   echo "error: FM_HOME '$FM_HOME' is not a directory; fm-lead cannot resolve this home's state" >&2
   exit 1
@@ -218,15 +222,15 @@ EOF
     [ "$send_rc" -eq 0 ] || exit "$send_rc"
     first=$(printf '%s\n' "$TEXT" | head -n 1)
     leader_note "note: steered $CREWMATE ($chars chars, $lines lines): $first"
-    mkdir -p "$FM_HOME/data/$LEADER/steers"
+    mkdir -p "$DATA/$LEADER/steers"
     if [ "${#RESOLVE_KEYS[@]}" -gt 0 ]; then key=$(IFS=,; printf '%s' "${RESOLVE_KEYS[*]}"); else key=-; fi
-    printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$CREWMATE" "$chars" "$lines" "$key" >> "$FM_HOME/data/$LEADER/steers/index"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$CREWMATE" "$chars" "$lines" "$key" >> "$DATA/$LEADER/steers/index"
     ;;
   trim)
     own_live_crewmate "$CREWMATE" || exit 1
     if [ "${#WORDS[@]}" -gt 0 ]; then FOCUS="${WORDS[*]}"; else FOCUS=; fi
     FOCUS=$(printf '%s' "$FOCUS" | tr '\n\t' '  ')
-    TRIMS="$FM_HOME/data/$CREWMATE/trims"
+    TRIMS="$DATA/$CREWMATE/trims"
     mkdir -p "$TRIMS"
     ORDER_EPOCH=$(date +%s)
     printf 'ordered\t%s\t%s\t%s\n' "$ORDER_EPOCH" "$LEADER" "${FOCUS:--}" >> "$TRIMS/index"

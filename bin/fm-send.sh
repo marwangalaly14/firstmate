@@ -201,10 +201,15 @@
 # three marks, recorded in the inbox record's header as mark=<mark>:
 #   --from-leader <id>    the leader's own steer; <id> must be the recorded
 #                         leader (bin/fm-lead.sh steer and trim pass it)
-#   --captain             the captain's words; the message must already stand
-#                         verbatim under "## Captain's intent" in
-#                         data/<id>/brief.md (the rule that the captain's words
-#                         are appended there first), else refused
+#   --captain             the captain's words; the message must contain, whole
+#                         and contiguous, a line of at least
+#                         FM_SEND_CAPTAIN_MIN_LINE (24) characters standing
+#                         under "## Captain's intent" in data/<id>/brief.md
+#                         (the rule that the captain's words are appended there
+#                         first), else refused. Containment, not equality, so a
+#                         captain line may be relayed inside quotation marks or
+#                         with a short frame around it; a word or a fragment of
+#                         a line is not the captain speaking and never passes.
 #   --lifecycle <action>  relaunch, teardown, handover or escalation; the
 #                         action rides in the mark, so an escalated door (the
 #                         watcher's 30-minute wake, or the leader dead) is
@@ -650,13 +655,25 @@ case "$LED_MARK" in
       exit 1
     fi
     LED_BRIEF="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md"
-    LED_INTENT=$(awk '/^## Captain'"'"'s intent$/{f=1; next} f && /^#/{exit} f' "$LED_BRIEF" 2>/dev/null || true)
-    case "$LED_INTENT" in
-      *"$*"*) [ -n "$*" ] || LED_INTENT= ;;
-      *) LED_INTENT= ;;
-    esac
+    # The minimum's only job is to refuse a word or a fragment, never to
+    # measure the message: a short degenerate line in an intent section
+    # ("None.", "The") must not be able to open the channel by itself.
+    FM_SEND_CAPTAIN_MIN_LINE=24
+    LED_INTENT=matched
+    FM_SEND_CAPTAIN_MSG="$*" awk -v min="$FM_SEND_CAPTAIN_MIN_LINE" '
+      BEGIN { msg = ENVIRON["FM_SEND_CAPTAIN_MSG"]; found = 0 }
+      /^## Captain'"'"'s intent$/ { f = 1; next }
+      f && /^##? / { exit }
+      f {
+        line = $0
+        sub(/^[ \t]+/, "", line)
+        sub(/[ \t]+$/, "", line)
+        if (length(line) >= min && index(msg, line) > 0) { found = 1; exit }
+      }
+      END { exit(found ? 0 : 1) }
+    ' "$LED_BRIEF" 2>/dev/null || LED_INTENT=
     if [ -z "$LED_INTENT" ]; then
-      echo "error: --captain carries the captain's words, and these do not stand under \"## Captain's intent\" in $LED_BRIEF; append the captain's words there verbatim first, then send the same words. Nothing was sent." >&2
+      echo "error: --captain carries the captain's words, and no whole line of \"## Captain's intent\" in $LED_BRIEF (at least $FM_SEND_CAPTAIN_MIN_LINE characters) stands inside these words; append the captain's words there verbatim first, then send a whole line of them - a word or a fragment of one is not the captain speaking. Nothing was sent." >&2
       exit 1
     fi
     ;;

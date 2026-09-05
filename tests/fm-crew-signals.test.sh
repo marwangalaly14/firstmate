@@ -494,6 +494,31 @@ test_an_automatic_trim_does_not_answer_the_order() {
   pass "an automatic trim never answers a leader's order - the stale ring still owes the leader one - and the manual trim the leader ordered closes it"
 }
 
+# --- the writer and the reader resolve data/ the same way --------------------
+# FM_DATA_OVERRIDE points data/ somewhere other than $FM_HOME/data. The order
+# bin/fm-lead.sh writes must be the order this check reads: a writer that built
+# its path from FM_HOME alone would drop the order into a file nothing ever
+# opens - no nudge, no ring, no error, nothing for a leader to notice.
+test_an_order_lands_where_the_check_reads_it() {
+  local elsewhere ordered_at
+  make_home order-elsewhere
+  elsewhere="$TMP_ROOT/order-elsewhere/elsewhere-data"
+  cp -R "$DATA" "$elsewhere"
+  ordered_at=$(date +%s)
+  env PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_DATA_OVERRIDE="$elsewhere" \
+    FM_FAKE_STATE="$STATE" FM_SEND_LOG="$HOME_DIR/send.log" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 keep the spec \
+    >/dev/null 2>"$HOME_DIR/lead.err" \
+    || fail "the leader's trim order must land under the override:"$'\n'"$(cat "$HOME_DIR/lead.err")"
+  run_signals FM_DATA_OVERRIDE="$elsewhere" FM_VITALS_NOW="$((ordered_at + 500))" -- c1
+  [ "$RC" -eq 0 ] || fail "the detector exits 0, got $RC: $ERR"
+  assert_contains "$OUT" "trim-order	rung	an ordered trim never happened: leader lead-a" \
+    "the check reads the order the leader wrote, wherever data/ was pointed"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "and rings the leader once, inbox has $(inbox_count lead-a)"
+  [ "$(queue_records)" -eq 0 ] || fail "First Mate is not woken for it"
+  pass "with data/ pointed away from FM_HOME, the order bin/fm-lead.sh writes is the order the signals check reads: writer and reader resolve the directory the same way"
+}
+
 test_dead_leader_is_recorded_once() {
   make_home dead
   plant_loop c1
@@ -526,4 +551,5 @@ test_the_ring_carries_no_logbook_words
 test_watcher_rings_from_its_poll_and_stays_quiet
 test_a_trim_order_that_was_never_answered_rings_the_leader
 test_an_automatic_trim_does_not_answer_the_order
+test_an_order_lands_where_the_check_reads_it
 test_dead_leader_is_recorded_once

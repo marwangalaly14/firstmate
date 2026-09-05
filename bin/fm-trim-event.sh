@@ -88,7 +88,9 @@
 #   crewmate's session, which is not the crewmate's concern. Only a missing
 #   argument (running it by hand) is refused with usage.
 # Reads: the payload on stdin (jq), the transcript it names, state/<id>.meta,
-# data/<task-id>/trims/index.
+# data/<task-id>/trims/index. FM_DATA_OVERRIDE points data/ elsewhere and is
+# resolved here exactly as every reader of these ledgers resolves it, so a
+# writer and its reader can never disagree about where a trim was recorded.
 # Writes: data/<task-id>/trims/; the leader's inbox or the wake queue; the
 # crewmate's own inbox, for the carry-on nudge after a leader-ordered trim.
 set -u
@@ -112,7 +114,7 @@ case "$ID" in
   *[!A-Za-z0-9._-]*|.|..) echo "error: '$ID' is not a task id" >&2; exit 2 ;;
 esac
 STATE="$FM_HOME/state"
-DATA="$FM_HOME/data"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 command -v jq >/dev/null 2>&1 || exit 0
 
