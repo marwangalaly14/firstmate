@@ -48,8 +48,11 @@ is_ghost() {  # gone from the inventory, yet display-message still answers
 }
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{pane_current_command}"*) [ -z "${FM_FAKE_PANE_COMMAND:-}" ] || { printf '%s\n' "$FM_FAKE_PANE_COMMAND"; exit 0; } ;;
+  *cursor_y*) printf '1\n'; exit 0 ;;
 esac
 case "${1:-}" in
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
   display-message)
     prev=
     for a in "$@"; do
@@ -148,6 +151,18 @@ run_spawn() {
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_DEAD_WINDOWS="${FM_FAKE_DEAD_WINDOWS:-}" FM_FAKE_GHOST_WINDOWS="${FM_FAKE_GHOST_WINDOWS:-}" PATH="$FAKEBIN_DIR:$PATH" \
     "$SPAWN" "$id" "$proj" --mode no-mistakes --yolo off "$@" 2>&1
+}
+
+# run_relaunch <home> <proj> <id>: relaunch a recorded task whose pane sits
+# agent-free in its worktree, keeping whatever brief it has.
+run_relaunch() {
+  local home=$1 proj=$2 id=$3
+  shift 3
+  env FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$home/user-home" CLAUDE_CONFIG_DIR='' \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$proj.wt-$id" FM_FAKE_PANE_COMMAND=zsh TMUX="fake,1,0" \
+    PATH="$FAKEBIN_DIR:$PATH" "$SPAWN" "$id" --relaunch "$@" 2>&1
 }
 
 run_lead() {  # <home> [fm-lead args...]
@@ -314,6 +329,49 @@ test_leader_is_refused_with_secondmate_and_relaunch() {
   pass "--leader is refused alongside --secondmate and --relaunch"
 }
 
+test_a_led_crewmate_relaunches_under_its_recorded_leader() {
+  local rec out status meta wt
+  rec=$(make_home relaunch-led)
+  read_home "$rec"
+  write_leader "$HOME_DIR" "$PROJ_DIR" lead-a
+  wt="$PROJ_DIR.wt-c1"
+  meta="$HOME_DIR/state/c1.meta"
+  brief_named() {  # <line>: c1's brief with the given doors line
+    mkdir -p "$HOME_DIR/data/c1"
+    printf '# Task\n## Captain'"'"'s intent\nRelaunch under the leader.\n\n## Firstmate spec\nNone.\n\n# Your story, and the two times you speak up\n%s\n' "$1" > "$HOME_DIR/data/c1/brief.md"
+  }
+  # shellcheck disable=SC2016  # the backticks are the brief's own Markdown
+  brief_named 'Your leader, `lead-a`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain'"'"'s words.'
+  git -C "$PROJ_DIR" worktree add --quiet -b wt-c1 "$wt"
+  out=$(env FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" HOME="$HOME_DIR/user-home" CLAUDE_CONFIG_DIR='' \
+    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" PATH="$FAKEBIN_DIR:$PATH" \
+    "$SPAWN" c1 "$PROJ_DIR" --mode no-mistakes --yolo off --leader lead-a 2>&1); status=$?
+  [ "$status" -eq 0 ] || fail "the led spawn must succeed (exit $status)"$'\n'"$out"
+  [ "$(grep '^leader=' "$meta" | cut -d= -f2-)" = lead-a ] || fail "the spawn records leader=lead-a"
+  # The recovery move: First Mate relaunches the crewmate with the same brief.
+  out=$(run_relaunch "$HOME_DIR" "$PROJ_DIR" c1); status=$?
+  [ "$status" -eq 0 ] || fail "a led crewmate must relaunch with its brief naming its recorded leader (exit $status)"$'\n'"$out"
+  [ "$(grep '^leader=' "$meta" | cut -d= -f2-)" = lead-a ] || fail "the relaunch keeps leader=lead-a"
+  [ "$(meta_leader_lines "$meta")" -eq 1 ] || fail "the relaunch must not duplicate the leader line ($(meta_leader_lines "$meta"))"
+  out=$(run_lead "$HOME_DIR" crew --leader lead-a)
+  assert_contains "$out" "c1 kind=ship" "the relaunched crewmate is still in its leader's crew"
+  # A brief re-scaffolded without the leader disagrees with the record: refused.
+  brief_named 'First Mate answers in your inbox.'
+  out=$(run_relaunch "$HOME_DIR" "$PROJ_DIR" c1); status=$?
+  [ "$status" -ne 0 ] || fail "a brief saying First Mate answers must not relaunch a crewmate recorded under lead-a"
+  assert_contains "$out" "leader mismatch for c1" "the relaunch refusal names the mismatch"
+  assert_contains "$out" "lead-a" "the relaunch refusal names the recorded leader"
+  # shellcheck disable=SC2016  # the backticks are the brief's own Markdown
+  brief_named 'Your leader, `lead-b`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain'"'"'s words.'
+  out=$(run_relaunch "$HOME_DIR" "$PROJ_DIR" c1); status=$?
+  [ "$status" -ne 0 ] || fail "a brief naming another leader must not relaunch a crewmate recorded under lead-a"
+  assert_contains "$out" "the brief names leader lead-b but the task record names leader lead-a" "the relaunch refusal names both leaders"
+  [ "$(grep '^leader=' "$meta" | cut -d= -f2-)" = lead-a ] || fail "a refused relaunch leaves the record's leader alone"
+  pass "a led crewmate relaunches with its brief naming its recorded leader, keeps one leader line, and a brief that disagrees with the record is refused"
+}
+
 test_fifth_crewmate_is_refused_until_one_is_torn_down() {
   local rec out status
   rec=$(make_home ceiling)
@@ -391,6 +449,7 @@ test_leader_equals_form_and_no_flag_leaves_meta_without_leader
 test_brief_and_spawn_must_agree_on_the_leader
 test_bad_leader_values_are_refused_before_any_record
 test_leader_is_refused_with_secondmate_and_relaunch
+test_a_led_crewmate_relaunches_under_its_recorded_leader
 test_fifth_crewmate_is_refused_until_one_is_torn_down
 test_lead_crew_lists_a_leaders_crewmates
 

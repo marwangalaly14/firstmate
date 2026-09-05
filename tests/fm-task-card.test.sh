@@ -176,6 +176,19 @@ test_sections_are_cut_and_the_card_is_bounded() {
 }
 
 # --- 4. the card's own words never mention the machinery ----------------------
+test_a_comment_inside_a_code_fence_does_not_end_a_section() {
+  local home
+  make_home fence; home=$HOME_DIR
+  write_brief "$home" c1 $'Run the guard:\n\n```sh\n# run this first\nbin/guard.sh\n```\n\nAcceptance:\n1. The card quotes the line after the fence: LOTUS-7741.'
+  run_card "$home" c1 "$(payload compact)"
+  [ "$RC" -eq 0 ] || fail "the card must exit 0 (got $RC)"$'\n'"$(cat "$home/card.err")"
+  assert_contains "$OUT" "# run this first" "the fenced comment line is printed as part of the intent"
+  assert_contains "$OUT" "LOTUS-7741" "the acceptance line after the fence is on the card"
+  assert_not_contains "$OUT" "Use the library; do not add a wrapper." "the intent still ends at the next real heading"
+  assert_contains "$OUT" "## Definition of done, from your brief" "the definition of done still follows"
+  pass "a '#' line inside a fenced code block is code, not a heading: the intent runs past it to the next real heading"
+}
+
 test_framing_never_mentions_the_machinery() {
   local home framing
   make_home words; home=$HOME_DIR
@@ -312,6 +325,7 @@ EOF
 test_prints_the_card_for_a_resumed_session
 test_prints_nothing_for_any_other_payload
 test_sections_are_cut_and_the_card_is_bounded
+test_a_comment_inside_a_code_fence_does_not_end_a_section
 test_framing_never_mentions_the_machinery
 test_missing_inputs_are_named
 test_spawn_installs_the_hook_for_every_claude_crewmate_and_leader

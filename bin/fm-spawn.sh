@@ -940,9 +940,9 @@ spawn_abort_cleanup() {
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
             echo "launch=$(launch_record_line "${LAUNCH:-}")"
-            [ -z "${LEADER_ARG:-}" ] || echo "leader=$LEADER_ARG"
+            [ -z "${SPAWN_LEADER:-}" ] || echo "leader=$SPAWN_LEADER"
             [ -z "${SPAWN_TRIM_MARK:-}" ] || { echo "trim_mark=$SPAWN_TRIM_MARK"; echo "trim_window=$SPAWN_TRIM_WINDOW"; }
-            [ "${LEADS_SET:-0}" -ne 1 ] || echo "leads=1"
+            [ "${LEADS:-0}" -ne 1 ] || echo "leads=1"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -1209,6 +1209,7 @@ RAW_LAUNCH=0
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+SPAWN_LEADER=$LEADER_ARG
 if [ "$RELAUNCH" -eq 1 ]; then
   [ "${#POS[@]}" -eq 1 ] || {
     echo "error: --relaunch takes the task id only; its project or home comes from the task's own record" >&2
@@ -1233,11 +1234,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fm_backend_validate_task_endpoint "$RELAUNCH_META" "$ID" || exit 1
   BACKEND=$FM_BACKEND_VALIDATED_BACKEND
   RELAUNCH_TARGET=$FM_BACKEND_VALIDATED_TARGET
-  # The role comes from the record: a leader relaunches as a leader (no trim
-  # line), a story crewmate relaunches with the line, whatever the record
-  # predates.
+  # The role and the leader come from the record: a leader relaunches as a
+  # leader (no trim line), a story crewmate relaunches with the line and under
+  # the leader it was spawned under, whatever the record predates.
   LEADS=0
   [ "$(fm_meta_get "$RELAUNCH_META" leads)" != 1 ] || LEADS=1
+  SPAWN_LEADER=$(fm_meta_get "$RELAUNCH_META" leader)
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
   # A relaunch must PROVE the previous agent is gone before it launches another
@@ -2046,19 +2048,26 @@ fi
 # inbox"); without --leader the brief says First Mate answers. A spawn that
 # disagrees would launch a crewmate whose brief names one answerer while its
 # record names another. A brief that says neither (hand-written, or scaffolded
-# before the doors existed) is launched as given.
+# before the doors existed) is launched as given. A relaunch's leader is the
+# record's (SPAWN_LEADER), since --leader is refused there.
 # shellcheck disable=SC2016  # the backticks are the brief's own Markdown, not a command substitution
 BRIEF_LEADER=$(sed -n 's/^Your leader, `\([^`]*\)`, answers in your inbox.*$/\1/p' "$BRIEF" | head -n 1)
-if [ -n "$BRIEF_LEADER" ] && [ "$BRIEF_LEADER" != "$LEADER_ARG" ]; then
-  if [ -n "$LEADER_ARG" ]; then
+if [ -n "$BRIEF_LEADER" ] && [ "$BRIEF_LEADER" != "$SPAWN_LEADER" ]; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but the task record names ${SPAWN_LEADER:+leader }${SPAWN_LEADER:-no leader}; re-scaffold the brief to match the record" >&2
+  elif [ -n "$LEADER_ARG" ]; then
     echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but this spawn passed --leader $LEADER_ARG; correct the flag or re-scaffold the brief" >&2
   else
     echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but this spawn passed no --leader; pass --leader $BRIEF_LEADER or re-scaffold the brief without one" >&2
   fi
   exit 1
 fi
-if [ -n "$LEADER_ARG" ] && grep -q -x 'First Mate answers in your inbox.' "$BRIEF"; then
-  echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but this spawn passed --leader $LEADER_ARG; re-scaffold the brief with --leader $LEADER_ARG" >&2
+if [ -n "$SPAWN_LEADER" ] && grep -q -x 'First Mate answers in your inbox.' "$BRIEF"; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but the task record names leader $SPAWN_LEADER; re-scaffold the brief with --leader $SPAWN_LEADER" >&2
+  else
+    echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but this spawn passed --leader $LEADER_ARG; re-scaffold the brief with --leader $LEADER_ARG" >&2
+  fi
   exit 1
 fi
 

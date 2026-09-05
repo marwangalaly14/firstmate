@@ -78,13 +78,15 @@ INBOX="$STATE/$ID.inbox"
 STATUS="$STATE/$ID.status"
 
 # section <file> <heading-line>: the body under that exact heading line, up to
-# the next heading of the same or a higher level.
+# the next heading of the same or a higher level. A "#" line inside a fenced
+# code block is code, not a heading.
 section() {
   local file=$1 heading=$2 level
   level=${heading%% *}
   awk -v h="$heading" -v lvl="${#level}" '
     function hlevel(line,   n) { n = 0; while (substr(line, n + 1, 1) == "#") n++; return n }
-    found && /^#/ { l = hlevel($0); if (l > 0 && l <= lvl) exit }
+    /^(```|~~~)/ { fence = !fence }
+    found && !fence && /^#/ { l = hlevel($0); if (l > 0 && l <= lvl) exit }
     found { print }
     $0 == h { found = 1 }
   ' "$file"

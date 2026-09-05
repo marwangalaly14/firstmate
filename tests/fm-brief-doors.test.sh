@@ -82,7 +82,9 @@ test_leader_is_named_and_must_be_a_recorded_leader() {
   assert_not_contains "$section" "First Mate answers in your inbox." "with a leader, First Mate is not the one who answers"
   assert_contains "$(cat "$brief")" "same obstacle twice, append \`blocked: {why}\` and stop; your leader will help." "rule 5 names the leader"
   assert_contains "$(cat "$brief")" "Your leader will reply with the decision." "rule 6 names the leader"
-  assert_contains "$(cat "$brief")" "Your leader (\`lead-a\`) and firstmate steer you through durable message files" "the inbox section names the leader"
+  assert_contains "$(cat "$brief")" "Your leader (\`lead-a\`) steers you through durable message files" "the inbox section names the leader as the one who steers"
+  assert_contains "$(cat "$brief")" "First Mate reaches this inbox only with lifecycle actions and the captain's words." "the inbox section limits First Mate to lifecycle and the captain's words"
+  assert_not_contains "$(cat "$brief")" "and firstmate steer you" "with a leader, First Mate does not steer the work"
   scaffold "$home" c2 proj --scout --leader lead-a
   [ "$RC" -eq 0 ] || fail "--leader on a scout must scaffold:"$'\n'"$OUT"
   assert_contains "$(doors_section "$home/data/c2/brief.md")" "Your leader, \`lead-a\`, answers" "a scout under a leader names it too"

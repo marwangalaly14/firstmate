@@ -117,10 +117,10 @@ age_of() {  # <epoch> -> 40s | 22m | 3h | 2d
 }
 
 k_of() {  # <tokens> -> 91K | 3.1K | 512 | ?
-  local n=$1
+  local n=$1 h
   case "$n" in ''|null|*[!0-9]*) printf '?'; return 0 ;; esac
-  if [ "$n" -ge 10000 ]; then printf '%sK' $(((n + 500) / 1000))
-  elif [ "$n" -ge 1000 ]; then printf '%s.%sK' $((n / 1000)) $(((n % 1000 + 50) / 100 % 10))
+  if [ "$n" -ge 9950 ]; then printf '%sK' $(((n + 500) / 1000))
+  elif [ "$n" -ge 1000 ]; then h=$(((n + 50) / 100)); printf '%s.%sK' $((h / 10)) $((h % 10))
   else printf '%s' "$n"; fi
 }
 

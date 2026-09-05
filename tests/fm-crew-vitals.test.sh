@@ -180,6 +180,24 @@ test_no_boundary_missing_transcript_and_leader_mark() {
 
 # --- repeats -------------------------------------------------------------------
 
+test_head_rounds_to_the_nearest_hundred_across_a_thousand() {
+  local home t out
+  home=$(make_home rounding)
+  write_task "$home" r1 ship "trim_mark=140000"
+  t="$home/r1.jsonl"
+  row_assistant $((NOW - 50)) m1 1850 0 0 100 > "$t"
+  point_transcript "$home" r1 "$t"
+  out=$(run_vitals "$home" r1 --line) || fail "r1 must succeed"
+  assert_contains "$out" "head 2.0K (peak 2.0K" "1950 tokens read 2.0K, not 1.0K"
+  write_task "$home" r2 ship "trim_mark=140000"
+  t="$home/r2.jsonl"
+  row_assistant $((NOW - 50)) m1 9899 0 0 100 > "$t"
+  point_transcript "$home" r2 "$t"
+  out=$(run_vitals "$home" r2 --line) || fail "r2 must succeed"
+  assert_contains "$out" "head 10K (peak 10K" "9999 tokens read 10K, not 9.0K"
+  pass "a head whose hundreds round up past 9 carries into the thousands: 1950 is 2.0K and 9999 is 10K"
+}
+
 test_planted_repeats_are_named() {
   local home t out i
   home=$(make_home repeats)
@@ -285,6 +303,7 @@ test_scopes_and_refusals() {
 
 test_known_transcript_yields_the_exact_card
 test_no_boundary_missing_transcript_and_leader_mark
+test_head_rounds_to_the_nearest_hundred_across_a_thousand
 test_planted_repeats_are_named
 test_growth_changes_only_what_changed_and_partial_lines_are_skipped
 test_scopes_and_refusals

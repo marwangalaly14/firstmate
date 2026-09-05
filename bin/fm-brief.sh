@@ -253,12 +253,14 @@ if [ "$LEADER_SET" -eq 1 ]; then
   DOORS_ANSWER="Your leader, \`$LEADER\`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain's words."
   HELPER="your leader will help"
   REPLIER="Your leader will reply with the decision"
-  STEERER="Your leader (\`$LEADER\`) and firstmate steer you"
+  STEERER="Your leader (\`$LEADER\`) steers you"
+  STEER_LIMIT=" First Mate reaches this inbox only with lifecycle actions and the captain's words."
 else
   DOORS_ANSWER="First Mate answers in your inbox."
   HELPER="firstmate will help"
   REPLIER="Firstmate will reply with the decision"
   STEERER="Firstmate steers you"
+  STEER_LIMIT=
 fi
 
 # The receive-and-ack half of the steering-inbox contract, included in every
@@ -268,7 +270,7 @@ fi
 # only carrier of the instruction.
 IFS= read -r -d '' INBOX_SECTION <<EOF || true
 # Firstmate instruction inbox
-$STEERER through durable message files in $INBOX_DIR.
+$STEERER through durable message files in $INBOX_DIR.$STEER_LIMIT
 When a terminal message says an instruction is waiting there - and at any natural checkpoint when you are unsure - list $INBOX_DIR/*.msg, read and act on each message in numeric order, then acknowledge each handled message by moving it: \`mv $INBOX_DIR/NNN.msg $INBOX_DIR/handled/\`.
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
 EOF

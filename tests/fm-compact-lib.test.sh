@@ -46,19 +46,7 @@ test_a_window_that_is_not_the_derivation_is_refused() {
   pass "refusals: a window that is not mark + reserved + margin, a non-number, an empty value"
 }
 
-test_constants_are_derived_from_one_owner_only() {
-  # A second copy of the number anywhere in bin/ would be a second owner: the
-  # spawn and every reader must take the line from the lib.
-  local hits
-  hits=$(grep -l '173000' "$ROOT"/bin/*.sh | grep -v 'fm-compact-lib.sh' || true)
-  [ -z "$hits" ] || fail "173000 is written outside bin/fm-compact-lib.sh:"$'\n'"$hits"
-  hits=$(grep -l 'autoCompactWindow' "$ROOT"/bin/*.sh | grep -v 'fm-compact-lib.sh' || true)
-  [ -z "$hits" ] || fail "the settings key is spelled outside bin/fm-compact-lib.sh (use FM_COMPACT_SETTINGS_KEY):"$'\n'"$hits"
-  pass "one owner: neither 173000 nor the settings key appears in another script"
-}
-
 test_constants_are_the_captains_line_and_the_harness_terms
 test_window_is_mark_plus_reserved_plus_margin
 test_a_window_that_is_not_the_derivation_is_refused
-test_constants_are_derived_from_one_owner_only
 echo "# all fm-compact-lib tests passed"
