@@ -255,9 +255,9 @@
 # A claude ship or scout crewmate that is not a leader is a story crewmate: its
 # worktree .claude/settings.local.json also carries the one settings key that
 # moves the harness's automatic trim to the captain's 140K line, derived in
-# bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; the sum
-# is never spelled here), and its record says so with trim_mark=140000 and
-# trim_window=<that sum>. Both are owned keys rewritten by every launch, so a
+# bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; this
+# script reads fm_compact_window rather than restating the sum), and its
+# record says so with trim_mark=140000 and trim_window=<that sum>. Both are owned keys rewritten by every launch, so a
 # relaunch onto a harness without the key drops the claim; a harness without the
 # key, a leader, and a secondmate get neither line nor claim. Nothing stops,
 # warns, or throttles the crewmate: the harness trims every session somewhere,
