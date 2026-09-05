@@ -341,6 +341,50 @@ test_watcher_absorbs_a_held_door_and_its_turn_end() {
   pass "watcher: a led crewmate's door its live leader holds is absorbed with its turn-end - no wake, a triage line, rung once whether by the hook or the watcher"
 }
 
+# --- 4b. the absorb marks the bytes it judged, never the ones that arrived ---
+# The window: leader_holds_signal reads the span, then the relay fork, fm-send
+# and the settle run before leader_absorb_signals marks the file. A `done:`
+# line the crewmate appends in that window was never classified, so it must
+# not be marked classified - it must still wake First Mate.
+test_absorb_marks_only_the_bytes_it_judged() {
+  local driver out marked size
+  make_home absorb-window
+  printf '%s\n' "$DOOR" > "$STATE/c1.status"
+  run_relay -- c1
+  [ "$(door_rows c1)" = 'rung story-size' ] || fail "fixture: the door was rung to a live leader"
+  # The watcher's own two halves, driven in order with the append between them.
+  driver="$HOME_DIR/drive-absorb.sh"
+  cat > "$driver" <<'SH'
+set -u
+# shellcheck source=/dev/null
+. "$1"
+f="$STATE/c1.status"
+sf=$(fm_wake_signal_seen_path "$STATE" "$f")
+sig=$(fm_wake_signal_sig "$f")
+leader_holds_signal "$f" || { echo "DRIVER: the door was not held" >&2; exit 1; }
+end=$FM_HELD_SPAN_END
+printf 'done: PR ready, checks green
+' >> "$f"
+leader_absorb_signals "$sf$(printf '	')$sig$(printf '	')$f$(printf '	')$end"
+printf 'judged=%s marked=%s size=%s
+' "$end" "$(fm_wake_signal_seen_size "$STATE" "$f")"   "$(LC_ALL=C wc -c < "$f" | tr -d '[:space:]')"
+SH
+  out=$(env "${CASE_ENV[@]}" bash "$driver" "$ROOT/bin/fm-watch.sh" 2> "$HOME_DIR/driver.err") \
+    || fail "the driver must run both halves: $out"$'\n'"$(cat "$HOME_DIR/driver.err")"
+  marked=$(printf '%s' "$out" | sed -n 's/.*marked=\([0-9]*\).*/\1/p')
+  size=$(printf '%s' "$out" | sed -n 's/.*size=\([0-9]*\).*/\1/p')
+  [ -n "$marked" ] && [ -n "$size" ] || fail "the driver reports what it judged and marked, got: $out"
+  [ "$marked" -lt "$size" ] || fail "the done: line's bytes are still unclassified after the absorb (marked=$marked, size=$size): $out"
+  grep -Fq "absorbed door signal held by leader lead-a: $STATE/c1.status" "$STATE/.watch-triage.log" \
+    || fail "the door itself was absorbed: $(cat "$STATE/.watch-triage.log" 2>/dev/null)"
+  [ "$(queue_records)" -eq 0 ] || fail "the absorb wakes nobody by itself"
+  # The next poll reads the unclassified bytes and wakes First Mate with them.
+  watch_bg
+  wait_exit || fail "the done: line the absorb never classified wakes First Mate at the next poll; out:"$'\n'"$(watch_report)"
+  queue_is_signal_on c1.status || fail "with its wake record, got:"$'\n'"$(watch_report)"
+  pass "the chain absorb marks exactly the bytes leader_holds_signal judged: a done: line appended in the window between the span read and the mark stays unclassified and wakes First Mate at the next poll"
+}
+
 # --- 5. the watcher: without a leader to hold it, the door surfaces ---------
 test_watcher_surfaces_when_no_leader_holds_the_door() {
   make_home dead-leader
@@ -444,6 +488,7 @@ test_relay_rings_each_keyed_door_once
 test_relay_leaves_the_unled_alone
 test_relay_records_failures_without_sending
 test_watcher_absorbs_a_held_door_and_its_turn_end
+test_absorb_marks_only_the_bytes_it_judged
 test_watcher_surfaces_when_no_leader_holds_the_door
 test_watcher_escalates_a_held_door_once_past_the_bound
 test_watcher_wakes_at_once_when_a_holding_leader_dies

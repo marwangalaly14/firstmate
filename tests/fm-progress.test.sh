@@ -167,6 +167,36 @@ test_scaffold_without_inputs_says_what_is_missing() {
   pass "with no brief, logbook, estimate or crewmates the scaffold names each missing input; bad estimates, unknown leaders and a missing FM_HOME are refused"
 }
 
+# A commit id is a hex word that MIXES digits and a-f letters; a plain long
+# number a leader's own line names is not one.
+test_only_a_mixed_hex_word_is_struck_from_done() {
+  local out
+  make_home strike
+  write_task "$HOME_DIR" lead-s "leads=1"
+  cat > "$DATA/lead-s/logbook.md" <<'EOF'
+# Logbook: lead-s
+
+## Done
+- Cut the crewmate's fresh head from 1560000 to 1400000 tokens.
+- The order at epoch 1757100000 was typed into the pane.
+- The keep-set landed in 7ea43a4, proved live.
+- The steer is measured (99e8821).
+EOF
+  run_progress scaffold lead-s --estimate 20
+  [ "$RC" -eq 0 ] || fail "scaffold exits 0, got $RC: $ERR"
+  assert_contains "$OUT" "- [x] Cut the crewmate's fresh head from 1560000 to 1400000 tokens." \
+    "a plain long number survives word for word: it is not a commit id"
+  assert_contains "$OUT" "- [x] The order at epoch 1757100000 was typed into the pane." \
+    "an epoch - what this project's own ledgers record - survives word for word"
+  assert_contains "$OUT" "- [x] The keep-set landed, proved live." \
+    "a mixed hex word is struck with the preposition that introduced it, leaving no double space"
+  assert_contains "$OUT" "- [x] The steer is measured." \
+    "a parenthesised commit id leaves no stray parenthesis or space before the stop"
+  assert_not_contains "$OUT" "7ea43a4" "no commit id survives"
+  assert_not_contains "$OUT" "99e8821" "nor a parenthesised one"
+  pass "the DONE section strikes only a hex word that mixes digits and a-f letters: a plain long number and an epoch survive word for word, a real commit id goes with its preposition and leaves no double space or stray parenthesis"
+}
+
 test_fleet_rolls_the_leaders_bars_into_one() {
   local first fence
   make_home fleet
@@ -201,4 +231,5 @@ test_fleet_rolls_the_leaders_bars_into_one() {
 test_bar_renders_twenty_cells
 test_scaffold_carries_the_six_parts
 test_scaffold_without_inputs_says_what_is_missing
+test_only_a_mixed_hex_word_is_struck_from_done
 test_fleet_rolls_the_leaders_bars_into_one

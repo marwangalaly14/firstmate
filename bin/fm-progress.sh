@@ -99,12 +99,50 @@ section_lines() {  # <file> <name>
 }
 
 # A commit id is not news: strike "(abc1234)", "(abc1234, def5678)" and a bare
-# 7-40 hex word out of a line that names what changed for a person.
+# hash word out of a line that names what changed for a person, with the
+# preposition that introduced it. A word is a commit id only when it is made
+# of [0-9a-f], is 7 to 40 characters long, AND mixes at least one digit with
+# at least one a-f letter - a plain long number ("epoch 1757100000", "1400000
+# tokens") and an all-letter word ("effaced") are words, not hashes. The
+# honest cost: an all-digit or all-letter hash is not struck, which is rare
+# and harmless, because this is a report and never a gate. The predicate needs
+# a look at the whole token, which portable ERE cannot express, so the strike
+# is an awk pass; the sed that follows only tidies the spacing it leaves.
 strike_commit_ids() {
-  # Portable ERE (BSD sed has no \b): a boundary is a non-alphanumeric or the end.
-  sed -E \
-    -e 's/ *(after|in|at|as|landed|commit|from|to) [0-9a-f]{7,40}([^0-9a-zA-Z]|$)/\2/g' \
-    -e 's/(^|[ (,])[0-9a-f]{7,40}([^0-9a-zA-Z]|$)/\1\2/g' \
+  awk '
+    function is_commit(t) {
+      return (t ~ /^[0-9a-f]+$/) && (length(t) >= 7) && (length(t) <= 40) \
+        && (t ~ /[0-9]/) && (t ~ /[a-f]/)
+    }
+    {
+      rest = $0; out = ""
+      while (match(rest, /[0-9A-Za-z]+/)) {
+        pre = substr(rest, 1, RSTART - 1)
+        tok = substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+        if (length(pre) > 0) prev = substr(pre, length(pre), 1)
+        else if (length(out) > 0) prev = substr(out, length(out), 1)
+        else prev = ""
+        # A hash is struck only where sed struck one: at the start of the line
+        # or after a space, "(" or ",", never inside a longer word.
+        if (is_commit(tok) && (prev == "" || prev == " " || prev == "(" || prev == ",")) {
+          kept = out pre
+          sub(/[^0-9A-Za-z]+$/, "", kept)
+          word = kept
+          sub(/^.*[^0-9A-Za-z]/, "", word)
+          if (word ~ /^(after|in|at|as|landed|commit|from|to)$/) {
+            sub(/ *[0-9A-Za-z]+$/, "", kept)
+            out = kept
+          } else {
+            out = out pre
+          }
+        } else {
+          out = out pre tok
+        }
+      }
+      print out rest
+    }' \
+  | sed -E \
     -e 's/\( *(, *)*\)//g' \
     -e 's/\( *, */(/g' \
     -e 's/ +([.,;:)])/\1/g' \

@@ -29,6 +29,11 @@ row_boundary() {  # <epoch> <trigger> <pre> <post>
   printf '{"type":"system","subtype":"compact_boundary","uuid":"b-%s","timestamp":"%s","compactMetadata":{"trigger":"%s","preTokens":%s,"postTokens":%s}}\n' "$RANDOM" "$(iso "$1")" "$2" "$3" "$4"
 }
 row_user() { printf '{"type":"user","uuid":"x-%s","timestamp":"%s","message":{"role":"user","content":"go"}}\n' "$RANDOM" "$(iso "$1")"; }
+# The harness's own trim summary: a user row that follows a compaction rather
+# than asking the model for anything (the shape tests/fm-trim-event.test.sh
+# models as row_summary). isMeta rows carry the same "not a prompt" meaning.
+row_summary() { printf '{"type":"user","uuid":"s-%s","timestamp":"%s","isCompactSummary":true,"message":{"role":"user","content":"summary"}}\n' "$RANDOM" "$(iso "$1")"; }
+row_meta() { printf '{"type":"user","uuid":"m-%s","timestamp":"%s","isMeta":true,"message":{"role":"user","content":"meta"}}\n' "$RANDOM" "$(iso "$1")"; }
 row_noise() { printf '{"type":"file-history-snapshot","messageId":"m"}\n'; }
 
 make_worktree() {  # <path> <commit-epoch>

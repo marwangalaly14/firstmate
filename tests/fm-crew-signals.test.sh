@@ -295,6 +295,45 @@ test_transcript_beats_the_report() {
   pass "a logbook that claims progress does not quiet the loop the transcript shows: the detector reads the transcript, not the report"
 }
 
+# --- 7b. an ordered trim's summary row is not a stall ------------------------
+test_a_trim_summary_is_not_a_stall() {
+  local t
+  make_home trimmed
+  # The leader ordered a trim: the call, the boundary, then the harness's own
+  # summary row, older than the bound. The crewmate idles at its prompt.
+  t=$(transcript c1)
+  {
+    row_assistant $((NOW - 2000)) m1 100 0 0 10 "$(tool_bash 'ls')"
+    row_boundary $((NOW - 1100)) manual 150000 20000
+    row_summary $((NOW - 1000))
+  } >> "$t"
+  run_signals FM_STUCK_CALL_SECS=900 -- c1
+  [ "$RC" -eq 0 ] || fail "the detector exits 0, got $RC: $ERR"
+  [ -z "$OUT" ] || fail "a crewmate idle at its prompt after an ordered trim rings no stall, got: '$OUT'"
+  [ ! -e "$DATA/c1/signals" ] || fail "and gets no ledger"
+  [ "$(inbox_count lead-a)" -eq 0 ] || fail "the leader is not rung for a trimmed, idle crewmate"
+  pass "a transcript ending in the harness's own trim summary rings no stall once FM_STUCK_CALL_SECS has passed: the crewmate is idle at its prompt, not wedged"
+}
+
+# --- 7c. the ring carries no word the crewmate wrote -------------------------
+test_the_ring_carries_no_logbook_words() {
+  local logbook body card
+  make_home ring-words
+  plant_loop c1
+  logbook=$(fm_logbook_path "$DATA" c1)
+  printf '## Done\n- all tests green, the story is finished\n## Next\n- MARKER-THE-CREWMATE-WROTE-THIS\n' > "$logbook"
+  # The leader's own card shows the line; the ring must not carry it.
+  card=$(env "${CASE_ENV[@]}" "$ROOT/bin/fm-crew-vitals.sh" c1) || fail "the card must be readable"
+  assert_contains "$card" "MARKER-THE-CREWMATE-WROTE-THIS" "the card the leader reads by hand keeps the logbook's next line"
+  run_signals -- c1
+  assert_contains "$OUT" "loop	rung" "the loop rings"
+  body=$(newest_inbox_body lead-a)
+  assert_contains "$body" "last call  Bash" "the ring still carries the card read from the outside"
+  assert_not_contains "$body" "MARKER-THE-CREWMATE-WROTE-THIS" "the crewmate's own logbook words never enter the ring"
+  assert_not_contains "$body" "all tests green" "nor anything else it wrote"
+  pass "the ring carries the card read from the outside and none of the crewmate's own logbook words; the full card keeps them for the leader to read by hand"
+}
+
 # --- 8. the watcher runs the check on its cadence and never wakes First Mate --
 test_watcher_rings_from_its_poll_and_stays_quiet() {
   local WOUT WPID i
@@ -351,5 +390,7 @@ test_stall_rings_only_while_busy
 test_drift_candidate_rings_without_a_logbook_change
 test_unled_crewmate_never_rings
 test_transcript_beats_the_report
+test_a_trim_summary_is_not_a_stall
+test_the_ring_carries_no_logbook_words
 test_watcher_rings_from_its_poll_and_stays_quiet
 test_dead_leader_is_recorded_once

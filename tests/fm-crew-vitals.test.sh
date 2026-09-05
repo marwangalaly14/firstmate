@@ -207,6 +207,65 @@ test_planted_repeats_are_named() {
   pass "a planted loop, five reads of one file, an A-B-A-B alternation are named; four chunked reads and a loop older than 30 calls are not"
 }
 
+# --- the trim summary is a boundary, not an unanswered prompt ----------------
+
+test_a_trim_summary_row_is_not_an_unanswered_prompt() {
+  local home t j
+  home=$(make_home summary)
+  write_task "$home" s1 ship
+  t="$home/s1.jsonl"
+  # The leader ordered a trim: the call, the boundary, then the harness's own
+  # summary row. The crewmate idles at its prompt after it.
+  {
+    row_assistant $((NOW - 3000)) m1 1000 0 0 100 "$(tool_bash 'ls')"
+    row_boundary $((NOW - 2000)) manual 150000 20000
+    row_summary $((NOW - 1900))
+  } > "$t"
+  point_transcript "$home" s1 "$t"
+  j=$(run_vitals "$home" s1 --json) || fail "s1 must succeed"
+  [ "$(printf '%s' "$j" | jq -r '.busy')" = false ] \
+    || fail "a transcript ending in the harness's trim summary reads idle, not busy (got $(printf '%s' "$j" | jq -r '.busy'))"
+  [ "$(printf '%s' "$j" | jq -r '.quiet_for')" = 1900 ] \
+    || fail "quiet_for is counted from the summary row, got $(printf '%s' "$j" | jq -r '.quiet_for')"
+  # An isMeta row is the same shape.
+  write_task "$home" s2 ship
+  t="$home/s2.jsonl"
+  { row_assistant $((NOW - 3000)) m1 1000 0 0 100 "$(tool_bash 'ls')"; row_meta $((NOW - 1000)); } > "$t"
+  point_transcript "$home" s2 "$t"
+  [ "$(run_vitals "$home" s2 --json | jq -r '.busy')" = false ] || fail "an isMeta user row is a boundary too"
+  # An ordinary prompt after the summary is an unanswered prompt again.
+  write_task "$home" s3 ship
+  t="$home/s3.jsonl"
+  { row_assistant $((NOW - 3000)) m1 1000 0 0 100 "$(tool_bash 'ls')"; row_summary $((NOW - 1900)); row_user $((NOW - 900)); } > "$t"
+  point_transcript "$home" s3 "$t"
+  [ "$(run_vitals "$home" s3 --json | jq -r '.busy')" = true ] \
+    || fail "a real prompt after the summary is busy again"
+  pass "the harness's own trim summary row (isCompactSummary, or isMeta) is the boundary it follows, not an unanswered prompt: busy is false and quiet_for counts from it; a real prompt after it is busy again"
+}
+
+# --- --outside: the card without the crewmate's own words --------------------
+
+test_outside_drops_the_logbook_line() {
+  local home t out j
+  home=$(make_home outside)
+  write_task "$home" o1 ship
+  t="$home/o1.jsonl"
+  row_assistant $((NOW - 50)) m1 1000 0 0 100 "$(tool_bash 'ls')" > "$t"
+  point_transcript "$home" o1 "$t"
+  fm_logbook_init "$home/data" o1
+  printf '# Logbook: o1\n\n## Done\n- half\n\n## Next\n- the crewmate typed this line itself\n' > "$(fm_logbook_path "$home/data" o1)"
+  out=$(run_vitals "$home" o1) || fail "the full card must succeed"
+  assert_contains "$out" 'next       "the crewmate typed this line itself"   (logbook)' "the full card keeps the logbook's next line for the leader to read"
+  out=$(run_vitals "$home" o1 --outside) || fail "--outside must succeed"
+  assert_not_contains "$out" "the crewmate typed this line itself" "--outside drops the crewmate's own words"
+  assert_not_contains "$out" "next  " "--outside drops the whole next line, not only its text"
+  assert_contains "$out" "last call  Bash" "--outside keeps everything read from the outside"
+  assert_contains "$out" "tokens " "--outside keeps the token line"
+  j=$(run_vitals "$home" o1 --json --outside) || fail "--outside --json must succeed"
+  [ "$(printf '%s' "$j" | jq -r '.next')" = null ] || fail "--outside carries no next in json either"
+  pass "--outside prints the card without the one field the crewmate wrote (the logbook's next line) and keeps every field read from the outside"
+}
+
 # --- growth, partial lines, scopes -------------------------------------------
 
 test_growth_changes_only_what_changed_and_partial_lines_are_skipped() {
@@ -265,6 +324,8 @@ test_known_transcript_yields_the_exact_card
 test_no_boundary_missing_transcript_and_leader_mark
 test_head_rounds_to_the_nearest_hundred_across_a_thousand
 test_planted_repeats_are_named
+test_a_trim_summary_row_is_not_an_unanswered_prompt
+test_outside_drops_the_logbook_line
 test_growth_changes_only_what_changed_and_partial_lines_are_skipped
 test_scopes_and_refusals
 

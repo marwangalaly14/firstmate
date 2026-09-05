@@ -253,7 +253,7 @@ test_manual_trim_records_and_rings_nobody() {
 
 # --- 3b. a manual trim after the leader's order is the leader's ---------------
 test_manual_trim_after_an_order_is_attributed() {
-  local home t idx
+  local home t idx lead_rc
   make_home ordered; home=$HOME_DIR
   write_task "$home" lead-a "leads=1"
   write_task "$home" c1 "leader=lead-a"
@@ -262,9 +262,13 @@ test_manual_trim_after_an_order_is_attributed() {
   run_hook "$home" c1 "$(payload auto "$t")"
   idx="$home/data/c1/trims/index"
   # The real order: fm-lead trim writes the ordered line, then types /compact.
+  # The compaction has not run yet, so fm-lead's bounded wait times out (exit
+  # 3) and the order stands in the ledger for the hook below to be attributed to.
+  lead_rc=0
   env PATH="$FAKEBIN:$PATH" FM_HOME="$home" FM_SEND_LOG="$home/send.log" FM_FAKE_STATE="$home/state" FM_SEND_SETTLE=0 \
-    "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 the failing test >/dev/null 2>"$home/lead.err" \
-    || fail "the leader's trim order failed:"$'\n'"$(cat "$home/lead.err")"
+    FM_LEAD_TRIM_WAIT_SECS=1 FM_LEAD_TRIM_POLL_SECS=1 \
+    "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 the failing test >/dev/null 2>"$home/lead.err" || lead_rc=$?
+  [ "$lead_rc" -eq 3 ] || fail "the leader's trim order stands, unconfirmed (exit 3), got $lead_rc:"$'\n'"$(cat "$home/lead.err")"
   assert_contains "$(cat "$home/send.log")" "/compact the failing test" "the order is typed"
   [ "$(sed -n '2p' "$idx" | cut -f1,3,4)" = $'ordered\tlead-a\tthe failing test' ] || fail "the order line follows the first trim:"$'\n'"$(cat "$idx")"
   run_hook "$home" c1 "$(payload manual "$t" "Focused on the failing test.")"

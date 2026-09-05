@@ -39,6 +39,18 @@
 #   exits 1; an unconfirmed submit (exit 3) keeps the order and exits 3. The
 #   harness runs a typed /compact at the crewmate's next turn boundary when
 #   the crewmate is mid-turn; the order is not an interrupt.
+#   trim then finishes the loop rather than leaving the crewmate idle at its
+#   prompt: a typed /compact returns the harness to the prompt and prompts
+#   nobody, so trim waits up to FM_LEAD_TRIM_WAIT_SECS (600; measured
+#   compactions take 100-215 s), reading data/<crewmate>/trims/index every
+#   FM_LEAD_TRIM_POLL_SECS (2) for the crewmate's own PostCompact line
+#   (`<n> manual <epoch> ...`, bin/fm-trim-event.sh) at or after the order.
+#   When it arrives, one continue-steer goes through the inbox doorbell -
+#   `trim done - continue: <focus>`, or `trim done - continue with your task
+#   card` without a focus - which is an append, so the law of the head holds.
+#   When it does not, the order stands in the ledger, the leader is told to
+#   read the pane and steer by hand, `note: trim of <crewmate> unconfirmed
+#   after <N>s` goes on the leader's status, and the exit is 3.
 #   steer and trim refuse, before writing anything: a crewmate not recorded in
 #   this home; one whose record names another leader or none ("not led by");
 #   one whose endpoint reads dead through bin/fm-lead-lib.sh (lifecycle is
@@ -50,7 +62,11 @@
 # FM_HOME must be explicit, exactly as for bin/fm-send.sh: a leader's view must
 # never silently resolve against another home. FM_STATE_OVERRIDE points the
 # state directory elsewhere for tests (crew only; steer and trim write through
-# fm-send, which reads FM_HOME/state).
+# fm-send, which reads FM_HOME/state); FM_LEAD_TRIM_WAIT_SECS and
+# FM_LEAD_TRIM_POLL_SECS bound and pace trim's wait for the trim event.
+# Reads: state/<id>.meta, data/<crewmate>/trims/index. Writes: the crewmate's
+# inbox and pane through fm-send, state/<leader>.status,
+# data/<leader>/steers/index, data/<crewmate>/trims/index.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -167,6 +183,19 @@ leader_note() {  # <text>: one line on the leader's own status
   printf '%s\n' "$1" >> "$STATE/$LEADER.status"
 }
 
+# 0 once the crewmate's own PostCompact hook has recorded a manual trim AFTER
+# this order: bin/fm-trim-event.sh's `<n> manual <epoch> ...` line appended
+# below our own `ordered <epoch> <leader> ...` line in the append-only ledger.
+# An order line is never a trim, so an order never reads as its own answer,
+# and an earlier trim of the same crewmate never does either.
+trim_recorded() {  # <trims-index> <order-epoch> <leader>
+  [ -f "$1" ] || return 1
+  awk -F '\t' -v epoch="$2" -v leader="$3" '
+    $1 == "ordered" && $2 == epoch && $3 == leader { seen = 1; next }
+    seen && $1 ~ /^[0-9]+$/ && $2 == "manual" { found = 1 }
+    END { exit !found }' "$1"
+}
+
 case "$VERB" in
   crew)
     [ -f "$STATE/$LEADER.meta" ] || {
@@ -217,7 +246,8 @@ EOF
     FOCUS=$(printf '%s' "$FOCUS" | tr '\n\t' '  ')
     TRIMS="$FM_HOME/data/$CREWMATE/trims"
     mkdir -p "$TRIMS"
-    printf 'ordered\t%s\t%s\t%s\n' "$(date +%s)" "$LEADER" "${FOCUS:--}" >> "$TRIMS/index"
+    ORDER_EPOCH=$(date +%s)
+    printf 'ordered\t%s\t%s\t%s\n' "$ORDER_EPOCH" "$LEADER" "${FOCUS:--}" >> "$TRIMS/index"
     if [ -n "$FOCUS" ]; then ORDER="/compact $FOCUS"; else ORDER="/compact"; fi
     send_rc=0
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" --from-leader "$LEADER" "$ORDER" || send_rc=$?
@@ -230,5 +260,27 @@ EOF
          exit 1 ;;
     esac
     leader_note "note: ordered a trim of $CREWMATE: ${FOCUS:-no focus given}"
+    TRIM_WAIT=${FM_LEAD_TRIM_WAIT_SECS:-600}
+    case "$TRIM_WAIT" in ''|*[!0-9]*) TRIM_WAIT=600 ;; esac
+    TRIM_POLL=${FM_LEAD_TRIM_POLL_SECS:-2}
+    case "$TRIM_POLL" in ''|0|*[!0-9]*) TRIM_POLL=2 ;; esac
+    until trim_recorded "$TRIMS/index" "$ORDER_EPOCH" "$LEADER"; do
+      if [ "$(( $(date +%s) - ORDER_EPOCH ))" -ge "$TRIM_WAIT" ]; then
+        ORDER_TIME=$(date -u -r "$ORDER_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+          || date -u -d "@$ORDER_EPOCH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+          || printf 'epoch %s' "$ORDER_EPOCH")
+        echo "fm-lead: the trim of $CREWMATE was ordered at $ORDER_TIME but no trim event arrived within ${TRIM_WAIT}s; the order stands in the ledger; read the pane (bin/fm-crew-vitals.sh $CREWMATE) and steer by hand" >&2
+        leader_note "note: trim of $CREWMATE unconfirmed after ${TRIM_WAIT}s"
+        exit 3
+      fi
+      sleep "$TRIM_POLL"
+    done
+    if [ -n "$FOCUS" ]; then CONTINUE="trim done - continue: $FOCUS"; else CONTINUE="trim done - continue with your task card"; fi
+    send_rc=0
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" --from-leader "$LEADER" "$CONTINUE" || send_rc=$?
+    if [ "$send_rc" -ne 0 ]; then
+      echo "fm-lead: $CREWMATE trimmed but the continue-steer did not reach it (fm-send exit $send_rc); steer it by hand" >&2
+      exit "$send_rc"
+    fi
     ;;
 esac

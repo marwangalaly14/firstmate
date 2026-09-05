@@ -1384,8 +1384,14 @@ EOF
 # is not rung again): the hook may not have run yet, or the crewmate may not
 # have one, and either way the ledger then says rung or why not before the
 # hold is judged.
+# The end of the span is taken ONCE, before the span is read, and published in
+# FM_HELD_SPAN_END for the caller to carry to leader_absorb_signals: the bytes
+# judged here and the bytes marked classified there must be the same bytes.
+# The status log is append-only, so [start, end) is stable; anything the
+# crewmate appends after this read stays unclassified and is judged next poll.
 leader_holds_signal() {  # <status-or-turn-ended-file>
-  local f=$1 task start span line key doors=0 events
+  local f=$1 task start end span line key doors=0 events
+  FM_HELD_SPAN_END=
   case "$f" in
     *.status) task=$(basename "$f"); task=${task%.status} ;;
     *.turn-ended) task=$(basename "$f"); task=${task%.turn-ended} ;;
@@ -1399,7 +1405,10 @@ leader_holds_signal() {  # <status-or-turn-ended-file>
       task_leader_alive "$task" >/dev/null || return 1
       start=$(fm_wake_signal_seen_size "$STATE" "$f")
       case "$start" in ''|*[!0-9]*) start=0 ;; esac
-      span=$(tail -c "+$((start + 1))" "$f" 2>/dev/null) || return 1
+      end=$(LC_ALL=C wc -c < "$f" 2>/dev/null | tr -d '[:space:]')
+      case "$end" in ''|*[!0-9]*) return 1 ;; esac
+      [ "$end" -ge "$start" ] || return 1
+      span=$(LC_ALL=C tail -c "+$((start + 1))" "$f" 2>/dev/null | LC_ALL=C head -c "$((end - start))") || return 1
       while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in *[![:space:]]*) ;; *) continue ;; esac
         status_is_captain_relevant "$line" || continue
@@ -1416,6 +1425,7 @@ EOF
       if [ "$doors" -eq 0 ]; then
         task_door_held "$task" || return 1
       fi
+      FM_HELD_SPAN_END=$end
       ;;
     *)
       task_leader_alive "$task" >/dev/null || return 1
@@ -1425,25 +1435,33 @@ EOF
   return 0
 }
 
-# Absorb the held signal files of one batch ("<seen>\t<sig>\t<file>" lines):
-# advance every marker the surfacing path would (the wake signature, the
-# classified position, the heartbeat backstop's position), so neither this
-# path nor the backstop re-reads the door; the drain's presentation cursor is
-# untouched, so the door line is still unread there. Logs each absorb.
+# Absorb the held signal files of one batch
+# ("<seen>\t<sig>\t<file>\t<span-end>" lines): advance every marker the
+# surfacing path would (the wake signature, the classified position, the
+# heartbeat backstop's position) THROUGH THE CARRIED SPAN END - the exact
+# bytes leader_holds_signal judged, never the file's size now, which may have
+# grown since. The drain's presentation cursor is untouched, so the door line
+# is still unread there. A missing or non-numeric end marks nothing for that
+# file: an unclassified re-read costs one extra look, a swallowed "done:"
+# costs a person waiting on finished work. Logs each absorb.
 leader_absorb_signals() {  # <pending-lines>
-  local sf sig f task size ident logged=''
-  while IFS=$(printf '\t') read -r sf sig f; do
+  local sf sig f end task ident logged=''
+  while IFS=$(printf '\t') read -r sf sig f end; do
     [ -n "$sf" ] || continue
     task=$(basename "$f"); task=${task%.*}
     case "$f" in
       *.status)
         fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
         mark_surface_reported "$f" "$sig" || true
-        size=$(LC_ALL=C wc -c < "$f" 2>/dev/null | tr -d '[:space:]')
-        ident=$(status_file_identity "$f") || ident=
-        if [ -n "$ident" ] && fm_wake_status_mark_current "$STATE" "$f"; then
-          mark_surfaced "$f" "$size" "$ident" || true
-        fi
+        case "${end:-}" in
+          ''|*[!0-9]*) ;;
+          *)
+            ident=$(status_file_identity "$f") || ident=
+            if [ -n "$ident" ] && fm_wake_status_seen_commit "$STATE" "$f" "$end" "$ident"; then
+              mark_surfaced "$f" "$end" "$ident" || true
+            fi
+            ;;
+        esac
         ;;
       *) printf '%s' "$sig" > "$sf" ;;
     esac
@@ -1993,7 +2011,7 @@ EOF
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue
       if leader_holds_signal "$f"; then
-        held_pending="${held_pending}${sf}"$'\t'"${sig}"$'\t'"${f}"$'\n'
+        held_pending="${held_pending}${sf}"$'\t'"${sig}"$'\t'"${f}"$'\t'"${FM_HELD_SPAN_END}"$'\n'
       else
         rest_pending="${rest_pending}${sf}"$'\t'"${sig}"$'\t'"${f}"$'\n'
       fi

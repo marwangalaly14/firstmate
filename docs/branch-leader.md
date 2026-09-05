@@ -63,6 +63,8 @@ Read that record against the story's acceptance criteria.
 - If the crewmate's head is heavy with what it no longer needs, order a trim with a focus: `FM_HOME=<home> bin/fm-lead.sh trim --leader <leader-id> <crewmate-id> <what to keep>`.
   The order is written into the crewmate's trim ledger first, then `/compact <focus>` is typed into its pane; a crewmate that is mid-turn queues the typed order and trims at its next turn boundary (measured live on 2.1.259: typed 8 s into a 49 s turn, queued on screen, run 10 ms after the turn ended), so an order is never an interrupt.
   The trim that follows is recorded as the leader's (`- ordered by: leader <id>`) and rings nobody.
+  The command finishes the loop itself, so a trim never leaves a crewmate idle at its prompt: it waits (up to `FM_LEAD_TRIM_WAIT_SECS`, 600 s) for the crewmate's own trim line in that ledger, then sends `trim done - continue: <focus>` through the inbox doorbell - an append, so [the law of the head](#the-law-of-the-head) holds.
+  If no trim arrives within the bound, the command says so and exits 3: the order stands in the ledger, `note: trim of <id> unconfirmed after <N>s` goes on your status, and it is yours to read the pane (`bin/fm-crew-vitals.sh <id>`) and steer by hand.
 - If the story is two stories, write the split note for First Mate in your logbook and status.
 - If the crewmate cannot be steered back, write the handover note from its logbook; First Mate relaunches, because a relaunch is irreversible and the leader never performs one.
 
@@ -79,6 +81,7 @@ Every five minutes the watcher reads each of your crewmates' cards and rings you
 
 The ring carries the crewmate's card and the steer command.
 It is mechanical, from the transcript and nowhere else: nothing the crewmate writes, says or reports enters it, so a logbook that claims progress does not quiet a loop the transcript shows.
+The card in the ring is the `--outside` one, without the logbook's next line - the card's one field in the crewmate's own words; run `bin/fm-crew-vitals.sh <id>` yourself when you want to read that line.
 Read the pane and the logbook against the story's acceptance criteria, then steer once if the work is off, or do nothing if it is sound; a foreground test run that legitimately takes twenty minutes rings a stall once and needs no answer.
 Each episode rings once (the ledger is `data/<id>/signals/index`); the same loop growing, or the same stall lengthening, stays silent, and a new shape rings again.
 First Mate is not told about signals; a dead leader's crewmate signals go nowhere (one failed row), and First Mate learns of the dead leader through its own liveness reads.

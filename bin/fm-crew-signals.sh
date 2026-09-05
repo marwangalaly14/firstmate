@@ -7,7 +7,10 @@
 # --json: the transcript the harness writes every turn, the worktree's HEAD
 # time, the logbook's modified time) and nothing from what the crewmate
 # writes, says or reports. The logbook enters only as "changed or not"; its
-# words never do. Three signals, each with a signature that names its episode:
+# words never do, in the reading OR in the ring: the card carried in the ring
+# is read with --outside, which drops the card's one field written by the
+# crewmate (the logbook's next line). The leader reads that line by hand on
+# the full card. Three signals, each with a signature that names its episode:
 #   stall   the crewmate is busy (the transcript's last conversation row is a
 #           tool call in flight, or a prompt or tool result the model has not
 #           answered) and nothing new has been written for FM_STUCK_CALL_SECS
@@ -170,7 +173,7 @@ read_leader() {
 card_text=
 read_card_text() {
   [ -z "$card_text" ] || return 0
-  card_text=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-vitals.sh" "$ID" 2>/dev/null) || card_text=
+  card_text=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-vitals.sh" "$ID" --outside 2>/dev/null) || card_text=
   [ -n "$card_text" ] || card_text="(the card could not be read: FM_HOME=$FM_HOME bin/fm-crew-vitals.sh $ID)"
 }
 
