@@ -90,6 +90,9 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  <id>/logbook.md    the crewmate's own Done/Next/Open/Decisions thinking file, created by fm-spawn for every ship and scout task, leaders included; never a count for anyone; survives teardown (bin/fm-logbook-lib.sh)
+  <id>/sessions.log  a claude task's real harness sessions, one line per session start, appended by the worker SessionStart hook; survives teardown (bin/fm-session-event.sh)
+  <id>/trims/        one record per trim of a claude task's context plus an index, written by the worker PostCompact hook; survives teardown (bin/fm-trim-event.sh)
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
@@ -134,6 +137,7 @@ state/               runtime records and signals; gitignored
   .status-presentation-cursor .status-presentation-lock  fleet-wide per-task status identity plus independent annotation and outcome-backstop byte offsets, with a serialization lock preventing already-presented lines from replaying while preserving delayed signal annotations; owned by fm-classify-lib.sh, with each task's row retired by teardown
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
+  .lead-<leader>.lock  per-leader lock fm-spawn holds from counting a leader's crewmates to publishing the new record, so two spawns cannot both take the fourth slot (bin/fm-lead-lib.sh)
   .claude-autoarm.lock .claude-autoarm-epoch .claude-autoarm-failure-notified .claude-autoarm-failure-alarmed .turnend-claude-blocks .turnend-claude-blocks.lock   Claude Stop auto-arm single-flight, epoch, failure-episode, attended-alarm, guard-budget, and budget-lock records; never touch
   .cursor-park-owner .cursor-park-owner.lock .turnend-cursor-blocks   Cursor stop-hook owner record, publication and commit lock, and bounded repair-nag budget; never touch
   .hash-* .count-* .stale-* .stale-since-* .churn-since-* .paused-* .wedge-escalations-* .writing-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch

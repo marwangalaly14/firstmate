@@ -11,10 +11,11 @@
 # place at natural checkpoints, under 40 lines. Nobody reads it to count
 # anything, and nothing here or anywhere in the fleet asks the crewmate for a
 # number: stuck and drift are read from the transcript, never from this file.
-# A trimmed session gets it reprinted (the spine, bin/fm-compact-spine.sh once
-# it exists), the vitals card reads its age, and a leader reads it against the
-# story's acceptance criteria when it judges drift. It survives teardown with
-# the brief and the report, because bin/fm-teardown.sh never removes data/<id>.
+# A trimmed session gets it reprinted on its task card (bin/fm-task-card.sh,
+# from the claude SessionStart hook), the vitals card reads its age, and a
+# leader reads it against the story's acceptance criteria when it judges
+# drift. It survives teardown with the brief and the report, because
+# bin/fm-teardown.sh never removes data/<id>.
 #
 # fm_logbook_path <data> <id>      -> <data>/<id>/logbook.md
 # fm_logbook_template <id>         -> the template text on stdout

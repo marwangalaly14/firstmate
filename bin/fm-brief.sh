@@ -248,7 +248,7 @@ INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 
 # Who answers the crewmate: its leader when it has one, First Mate otherwise.
 # While a leader exists, First Mate's channel to a working crewmate carries
-# lifecycle and the captain's words only (AGENTS.md; the epic's principle 12).
+# lifecycle and the captain's words only (docs/branch-leader.md owns the rule).
 if [ "$LEADER_SET" -eq 1 ]; then
   DOORS_ANSWER="Your leader, \`$LEADER\`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain's words."
   HELPER="your leader will help"
