@@ -86,7 +86,8 @@
 # report to your leader or First Mate, never the captain; on a project that
 # runs the loop, land in its order (session, push, preview, reading, the
 # ready line, STOP before stage); never run release, gc --prune or
-# gc --abandon on the session's own judgement. Nothing in a generated brief
+# gc --abandon on the session's own judgement; plant a fault before believing
+# a clean result from a check you wrote. Nothing in a generated brief
 # names the machinery that measures the crewmate from outside
 # (tests/fm-brief-doors.test.sh keeps it that way).
 # Refuses to overwrite an existing brief.
@@ -309,15 +310,17 @@ DOORS_SECTION=${DOORS_SECTION%$'\n'}
 
 # The crewmate contract, project-agnostic: who the crewmate reports to, the
 # landing order on a project that runs the loop (session, push, preview,
-# reading, the ready line, STOP before stage), and the three commands a
-# session never runs on its own judgement. One paragraph; the brief carries
-# it because a project's own rulebook may not reach the session.
+# reading, the ready line, STOP before stage), the three commands a session
+# never runs on its own judgement, and the proof habit (plant a fault before
+# believing a clean result from a check you wrote). One paragraph; the brief
+# carries it because a project's own rulebook may not reach the session.
 IFS= read -r -d '' CONTRACT_SECTION <<EOF || true
 # Crewmate contract
 You report to your leader or to First Mate, never to the captain: what you have to say goes in your status file, your logbook or your report, and the answer comes back in your inbox.
 On a project that runs the loop, land work in its order: \`session\` first, then push your branch, \`preview\`, get a reading, append your ready line, and STOP before \`stage\`; staging and everything after it are decided above you.
 Never run \`release\`, \`gc --prune\` or \`gc --abandon\` on your own judgement: only on the captain's word, carried in this brief or given in the conversation you are in.
 On a project without that loop, the Definition of done below is the whole landing.
+Before you believe a clean result from a check you wrote, plant a fault and watch it go red.
 EOF
 CONTRACT_SECTION=${CONTRACT_SECTION%$'\n'}
 

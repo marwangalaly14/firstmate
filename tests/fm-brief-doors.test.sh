@@ -125,9 +125,10 @@ test_crewmate_contract_paragraph() {
     assert_contains "$section" "On a project that runs the loop, land work in its order: \`session\` first, then push your branch, \`preview\`, get a reading, append your ready line, and STOP before \`stage\`" "$id: the landing order"
     assert_contains "$section" "Never run \`release\`, \`gc --prune\` or \`gc --abandon\` on your own judgement: only on the captain's word, carried in this brief or given in the conversation you are in." "$id: the three commands"
     assert_contains "$section" "On a project without that loop, the Definition of done below is the whole landing." "$id: a project without the loop"
+    assert_contains "$section" "Before you believe a clean result from a check you wrote, plant a fault and watch it go red." "$id: plant a fault before believing a clean result"
     [ "$(printf '%s\n' "$section" | grep -c -v '^#' | tr -d ' ')" -le 6 ] || fail "$id: the contract is one short paragraph, got:"$'\n'"$section"
   done
-  pass "every ship mode and the scout scaffold carry the crewmate contract: report to your leader or First Mate never the captain, the landing order with STOP before stage, release and gc never on the session's own judgement"
+  pass "every ship mode and the scout scaffold carry the crewmate contract: report to your leader or First Mate never the captain, the landing order with STOP before stage, release and gc never on the session's own judgement, plant a fault before believing a clean result"
 }
 
 # --- 4. the crewmate knows its own id and brief; reads long files through a sub-agent ---
