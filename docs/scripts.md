@@ -115,6 +115,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-compact-lib.sh`      | One owner of the 140K line (the mark, the harness's two terms, the derived `autoCompactWindow`) and of the keep-set every trim's summary must keep |
 | `fm-compact-keep.sh`     | Print the keep-set to the harness's summarizer from a claude PreCompact hook, before every automatic or typed trim |
 | `fm-logbook-lib.sh`      | One owner of a crewmate's logbook, `data/<id>/logbook.md`: its path, its four-heading template, and the create-once init the spawn runs for crewmates and leaders |
+| `fm-crew-vitals.sh`      | One four-line card per crewmate (head, peak and mark, trims, turns; the last tool call and any repeat; tokens since the last commit and the logbook; the logbook's next line), read from the transcript, the record, the worktree and the logbook, never from the crewmate |
+| `fm-trim-event.sh`       | Record every trim of a crewmate's context from a claude PostCompact hook (`data/<id>/trims/`) and, from the second automatic trim on, put one line into the leader's steering inbox or one signal wake before First Mate |
 | `fm-branch-prompt.sh`    | Emit the Pi supervision branch's byte-stable system prompt ([pi-supervision-branch.md](pi-supervision-branch.md)) |
 | `fm-branch-outcome.sh`   | Own the supervision branch's append-only outcome store, cursors, bounded status-coverage indexes, and session-start replay |
 | `fm-lease.sh`            | Claim, release, inspect, and sweep per-task supervision leases                       |

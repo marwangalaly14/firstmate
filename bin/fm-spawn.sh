@@ -2874,8 +2874,16 @@ if [ "$KIND" != secondmate ]; then
       # instructions. Leaders included; the crewmate's own context never
       # carries the text.
       j_precompact=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-compact-keep.sh") 2>/dev/null || true")
+      # The trim record (bin/fm-trim-event.sh): after every trim, automatic or
+      # typed, the hook writes data/<id>/trims/<n>.md with the head before the
+      # trim and the summary, and from the second automatic trim on puts one
+      # line into the leader's steering inbox (leader= below) or, without a
+      # live leader, one signal wake for First Mate. Leaders included; the
+      # command prints nothing, because the harness shows a PostCompact
+      # hook's stdout in the crewmate's terminal.
+      j_postcompact=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-trim-event.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}]}$j_trim}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
