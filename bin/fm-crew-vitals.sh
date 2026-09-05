@@ -69,6 +69,11 @@ command -v jq >/dev/null 2>&1 || { echo "error: jq is required to read a transcr
 . "$SCRIPT_DIR/fm-lead-lib.sh"
 # shellcheck source=bin/fm-logbook-lib.sh
 . "$SCRIPT_DIR/fm-logbook-lib.sh"
+# fm_path_mtime, the fleet's portable mtime read (BSD stat -f, GNU stat -c;
+# never the `-f || -c` fallback, because GNU `stat -f` is filesystem status
+# and prints a dump instead of failing).
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 FORMAT=card
 SCOPE=
@@ -100,10 +105,6 @@ fi
 
 NOW=${FM_VITALS_NOW:-$(date +%s)}
 case "$NOW" in ''|*[!0-9]*) echo "error: FM_VITALS_NOW must be epoch seconds" >&2; exit 1 ;; esac
-
-file_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
-}
 
 age_of() {  # <epoch> -> 40s | 22m | 3h | 2d
   local then=$1 d
@@ -230,7 +231,7 @@ vitals_json() {  # <id> -> one JSON object on stdout
   logbook_state=missing
   next=
   if [ -f "$logbook" ]; then
-    logbook_epoch=$(file_mtime "$logbook")
+    logbook_epoch=$(fm_path_mtime "$logbook")
     if [ "$(cat "$logbook")" = "$(fm_logbook_template "$id")" ]; then
       logbook_state=untouched
     else
