@@ -55,7 +55,9 @@ test_init_creates_once_and_never_overwrites() {
   printf '# Logbook: a1\n\n## Done\n- the crewmate wrote this\n' > "$file"
   fm_logbook_init "$data" a1 || fail "a second init must succeed"
   [ "$(cat "$file")" = "$(printf '# Logbook: a1\n\n## Done\n- the crewmate wrote this')" ] || fail "a second init must leave the crewmate's text untouched"
-  [ -z "$(ls "$data/a1" | grep -v '^logbook.md$')" ] || fail "init leaves no temp file behind, got: $(ls "$data/a1")"
+  for leftover in "$data/a1"/*; do
+    [ "$(basename "$leftover")" = logbook.md ] || fail "init leaves no temp file behind, got: $leftover"
+  done
   fm_logbook_init "$data" "" 2>/dev/null && fail "init without an id must refuse"
   fm_logbook_init "" a1 2>/dev/null && fail "init without a data dir must refuse"
   pass "init writes the template once, keeps what the crewmate wrote on every later call, and refuses without its two arguments"
