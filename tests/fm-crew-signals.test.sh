@@ -466,6 +466,34 @@ test_a_trim_order_that_was_never_answered_rings_the_leader() {
   pass "an ordered trim nothing answered rings its leader once past the bound, naming the crewmate, the age and that no trim event came, and only while the crewmate is idle: a busy one is never reported however old the order, and an order inside the bound, one a trim answered and one the leader abandoned ring nobody"
 }
 
+# --- an automatic trim does not answer the leader's order --------------------
+# The leader's /compact is queued behind the crewmate's turn; the harness's own
+# auto-trim window can be crossed first. That automatic trim is not the trim
+# the leader ordered, so the order still stands and this signal still owes the
+# leader a ring when the queued /compact never runs.
+test_an_automatic_trim_does_not_answer_the_order() {
+  make_home auto-order
+  mkdir -p "$DATA/c1/trims"
+  {
+    printf 'ordered\t%s\tlead-a\tkeep the spec\n' "$((NOW - 500))"
+    printf '1\tauto\t%s\t138000\t-\n' "$((NOW - 400))"
+  } > "$DATA/c1/trims/index"
+  run_signals FM_VITALS_NOW="$NOW" -- c1
+  [ "$RC" -eq 0 ] || fail "the detector exits 0, got $RC: $ERR"
+  assert_contains "$OUT" "trim-order	rung	an ordered trim never happened: leader lead-a ordered it 8m ago" \
+    "an automatic trim leaves the order standing, so the stale ring still fires"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the leader is rung once, inbox has $(inbox_count lead-a)"
+  # The ordered manual trim that follows answers it: silent from then on, at
+  # any later age.
+  printf '2\tmanual\t%s\t120000\t-\tordered:lead-a\n' "$((NOW - 300))" >> "$DATA/c1/trims/index"
+  rm -rf "$DATA/c1/signals"
+  run_signals FM_VITALS_NOW="$((NOW + 5000))" -- c1
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] || fail "the ordered manual trim closes the order, got rc=$RC '$OUT' ($ERR)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "and rings nobody again, inbox has $(inbox_count lead-a)"
+  [ "$(queue_records)" -eq 0 ] || fail "First Mate is not woken for any of it"
+  pass "an automatic trim never answers a leader's order - the stale ring still owes the leader one - and the manual trim the leader ordered closes it"
+}
+
 test_dead_leader_is_recorded_once() {
   make_home dead
   plant_loop c1
@@ -497,4 +525,5 @@ test_a_live_helper_holds_the_stall_but_never_disables_it
 test_the_ring_carries_no_logbook_words
 test_watcher_rings_from_its_poll_and_stays_quiet
 test_a_trim_order_that_was_never_answered_rings_the_leader
+test_an_automatic_trim_does_not_answer_the_order
 test_dead_leader_is_recorded_once

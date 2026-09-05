@@ -31,7 +31,9 @@
 #     ordered <epoch> <leader> <focus|->
 #   to data/<crewmate>/trims/index (bin/fm-trim-event.sh's ledger; it skips
 #   lines that do not start with a number when counting trims and attributes
-#   the manual trim that follows to this order), then types `/compact <focus>`
+#   the manual trim that follows to this order - only a manual one, because an
+#   automatic trim is not the thing the leader ordered and so cannot answer for
+#   it), then types `/compact <focus>`
 #   into the crewmate's pane through fm-send's typed plane, and notes
 #   `note: ordered a trim of <crewmate>: <focus>` on the leader's status. A
 #   /compact that provably did not reach the pane (fm-send exit other than 0

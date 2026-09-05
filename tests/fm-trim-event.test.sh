@@ -316,6 +316,64 @@ test_manual_trim_after_an_order_is_attributed() {
   pass "a manual trim after fm-lead's order is the leader's (record and ledger say so, not counted, rings the leader not at all) and carries the crewmate its carry-on nudge even though the ordering command is long gone; a hand-typed or failed-order trim is nobody's and is nudged by nobody; order lines never count"
 }
 
+# --- 3d. an automatic trim before the turn boundary spends no order ----------
+# The double-trim shape the ledger has to survive: the leader orders a trim
+# while the crewmate is mid-turn, so the typed /compact is queued behind the
+# turn, and the crewmate crosses the harness's own auto-trim window first. That
+# automatic trim is not the thing the leader ordered, so it must answer nothing
+# and leave the order standing for the queued /compact to spend.
+pending_order() {  # <trims-index-file>
+  bash -c '. "$1"; . "$2"; fm_lead_pending_order "$3"' _ \
+    "$ROOT/bin/fm-backend.sh" "$ROOT/bin/fm-lead-lib.sh" "$1"
+}
+
+test_an_automatic_trim_before_the_boundary_leaves_the_order() {
+  local home t idx msgs f pending
+  make_home autofirst; home=$HOME_DIR
+  write_task "$home" lead-a "leads=1"
+  write_task "$home" c1 "leader=lead-a"
+  t="$home/c1.jsonl"
+  write_transcript "$t"
+  idx="$home/data/c1/trims/index"
+  env PATH="$FAKEBIN:$PATH" FM_HOME="$home" FM_SEND_LOG="$home/send.log" FM_FAKE_STATE="$home/state" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 keep the spec >/dev/null 2>"$home/lead.err" \
+    || fail "the leader's trim order must land:"$'\n'"$(cat "$home/lead.err")"
+  # The automatic trim that beats the queued /compact to the crewmate.
+  run_hook "$home" c1 "$(payload auto "$t" "Auto-compacted.")"
+  assert_quiet "$home" "automatic trim before the boundary"
+  case "$(cat "$home/data/c1/trims/1.md")" in
+    *"ordered by"*) fail "an automatic trim is never attributed to the order:"$'\n'"$(cat "$home/data/c1/trims/1.md")" ;;
+  esac
+  [ ! -d "$home/state/c1.inbox" ] \
+    || fail "an automatic trim carries no nudge; c1's inbox holds $(ls "$home/state/c1.inbox" 2>/dev/null)"
+  pending=$(pending_order "$idx") \
+    || fail "the leader's order must still stand after an automatic trim:"$'\n'"$(cat "$idx")"
+  [ "$(printf '%s' "$pending" | cut -f2,3)" = $'lead-a\tkeep the spec' ] \
+    || fail "the standing order is still the leader's, with its focus, got: '$pending'"
+  # The queued /compact finally runs: this is the trim the leader ordered.
+  run_hook "$home" c1 "$(payload manual "$t" "Kept the spec.")"
+  assert_quiet "$home" "the ordered manual trim"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- ordered by: leader lead-a (order at epoch " \
+    "the manual trim that follows is the leader's"
+  msgs=0
+  for f in "$home"/state/c1.inbox/*.msg; do [ -f "$f" ] && msgs=$((msgs + 1)); done
+  [ "$msgs" -eq 1 ] || fail "one order carries exactly one nudge, got $msgs"
+  [ "$(inbox_body "$home/state/c1.inbox/001.msg")" = 'trim done - continue: keep the spec' ] \
+    || fail "the nudge names the order's focus, got: '$(inbox_body "$home/state/c1.inbox/001.msg")'"
+  [ ! -d "$home/state/lead-a.inbox" ] || fail "neither trim rings the leader: the automatic one is the first"
+  # The ledger shows both trims, with only the manual one marked as the leader's.
+  [ "$(sed -n '1p' "$idx" | cut -f1,3,4)" = $'ordered\tlead-a\tkeep the spec' ] \
+    || fail "the order line stands first:"$'\n'"$(cat "$idx")"
+  [ "$(sed -n '2p' "$idx" | cut -f1,2,6)" = $'1\tauto' ] \
+    || fail "the automatic trim is recorded and marked for nobody:"$'\n'"$(cat "$idx")"
+  [ "$(sed -n '3p' "$idx" | cut -f1,2,6)" = $'2\tmanual\tordered:lead-a' ] \
+    || fail "the manual trim is recorded as the leader's:"$'\n'"$(cat "$idx")"
+  # And the order is spent: nothing stands for a later trim to claim.
+  pending_order "$idx" >/dev/null \
+    && fail "the ordered manual trim spends the order:"$'\n'"$(cat "$idx")"
+  pass "an automatic trim that lands before the queued /compact answers no order and nudges nobody; the ordered manual trim that follows is the leader's, carries exactly one nudge and spends the order"
+}
+
 # --- 3c. the order is spent before the nudge, whatever the send does ---------
 # The one-shot guarantee cannot depend on the send: fm-send is the slow step
 # and a PostCompact hook can be killed inside it. Here the send is made to
@@ -546,6 +604,7 @@ test_records_every_trim
 test_second_automatic_trim_rings_the_leader
 test_manual_trim_records_and_rings_nobody
 test_manual_trim_after_an_order_is_attributed
+test_an_automatic_trim_before_the_boundary_leaves_the_order
 test_a_failed_nudge_still_spends_the_order
 test_without_a_live_leader_first_mate_is_signalled
 test_unreadable_payloads_write_nothing

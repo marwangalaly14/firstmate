@@ -27,8 +27,10 @@
 #           verdict: the leader confirms it against the acceptance criteria.
 #           Signature: the commit and the logbook change it measures from.
 #   trim-order  the crewmate's trim ledger carries an order its leader gave
-#           (bin/fm-lead.sh trim) that nothing has answered - no trim event
-#           and no order-failed line - the order is FM_LEAD_ORDER_STALE_SECS
+#           (bin/fm-lead.sh trim) that nothing has answered - no manual trim
+#           and no order-failed line, an automatic trim answering nothing
+#           because it is not the thing the leader ordered - the order is
+#           FM_LEAD_ORDER_STALE_SECS
 #           (430) old or older, AND the crewmate is not busy: the ordered trim
 #           never happened, so nobody carried the crewmate on. Both halves are
 #           required because a typed /compact is queued by the harness and runs
@@ -41,8 +43,9 @@
 #           docs/branch-leader.md), so an ordinary slow trim is never called
 #           stale. Pending is read by bin/fm-lead-lib.sh's
 #           fm_lead_pending_order, the one reading of it this fleet has.
-#           Signature: the order's epoch, so one order rings once; a trim line
-#           or an order-failed line ends the episode by clearing the order.
+#           Signature: the order's epoch, so one order rings once; a manual
+#           trim line or an order-failed line ends the episode by clearing the
+#           order.
 # Each signal rings the leader named by state/<task-id>.meta's leader= line
 # once per episode: the ledger data/<task-id>/signals/index takes one row per
 # signal and signature -
