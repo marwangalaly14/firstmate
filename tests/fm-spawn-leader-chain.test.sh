@@ -15,16 +15,37 @@ SPAWN="$ROOT/bin/fm-spawn.sh"
 LEAD="$ROOT/bin/fm-lead.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-leader-chain)
 
-# Fake tmux: the spawn fixture's shape (pane path, silent launch) plus one knob,
-# FM_FAKE_DEAD_WINDOWS: a space-separated list of window names whose
-# `display-message -t <session>:<window>` presence read fails, which is exactly
-# the cheap endpoint read the fleet digest uses for "endpoint: dead".
+# Fake tmux: the spawn fixture's shape (pane path, silent launch) plus two
+# knobs, each a space-separated list of window names. FM_FAKE_DEAD_WINDOWS are
+# gone: missing from `list-windows -t <session>` (the exact inventory
+# fm-backend's recovery-grade read checks first) and failing the
+# `display-message -t <session>:<window>` presence read (the digest's cheap
+# read, which decides when the recovery-grade read cannot classify the
+# foreground - here it never can, so both reads are exercised).
+# FM_FAKE_GHOST_WINDOWS are what tmux 3.7 makes of a killed window while its
+# session lives: missing from the inventory, yet display-message still answers
+# with the session's current window. Every window named by a record in
+# FM_STATE_OVERRIDE exists unless one of the knobs names it.
 make_fakebin() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+is_dead() {
+  local dead
+  for dead in ${FM_FAKE_DEAD_WINDOWS:-}; do
+    [ "$1" = "$dead" ] && return 0
+  done
+  return 1
+}
+is_ghost() {  # gone from the inventory, yet display-message still answers
+  local ghost
+  for ghost in ${FM_FAKE_GHOST_WINDOWS:-}; do
+    [ "$1" = "$ghost" ] && return 0
+  done
+  return 1
+}
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
@@ -33,17 +54,22 @@ case "${1:-}" in
     prev=
     for a in "$@"; do
       if [ "$prev" = "-t" ]; then
-        w=${a#*:}
-        for dead in ${FM_FAKE_DEAD_WINDOWS:-}; do
-          [ "$w" = "$dead" ] && exit 1
-        done
+        is_dead "${a#*:}" && exit 1
       fi
       prev=$a
     done
     printf 'firstmate\n'
     exit 0
     ;;
-  list-windows) exit 0 ;;
+  list-windows)
+    for meta in "${FM_STATE_OVERRIDE:-/nonexistent}"/*.meta; do
+      [ -f "$meta" ] || continue
+      w=$(sed -n 's/^window=[^:]*://p' "$meta" | head -1)
+      [ -n "$w" ] || continue
+      is_dead "$w" || is_ghost "$w" || printf '%s\n' "$w"
+    done
+    exit 0
+    ;;
   has-session|new-session|new-window|kill-window|set-window-option|send-keys) exit 0 ;;
 esac
 exit 0
@@ -120,7 +146,7 @@ run_spawn() {
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
-    FM_FAKE_DEAD_WINDOWS="${FM_FAKE_DEAD_WINDOWS:-}" PATH="$FAKEBIN_DIR:$PATH" \
+    FM_FAKE_DEAD_WINDOWS="${FM_FAKE_DEAD_WINDOWS:-}" FM_FAKE_GHOST_WINDOWS="${FM_FAKE_GHOST_WINDOWS:-}" PATH="$FAKEBIN_DIR:$PATH" \
     "$SPAWN" "$id" "$proj" --mode no-mistakes --yolo off "$@" 2>&1
 }
 
@@ -128,7 +154,7 @@ run_lead() {  # <home> [fm-lead args...]
   local home=$1
   shift
   env FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
-    FM_FAKE_DEAD_WINDOWS="${FM_FAKE_DEAD_WINDOWS:-}" PATH="$FAKEBIN_DIR:$PATH" \
+    FM_FAKE_DEAD_WINDOWS="${FM_FAKE_DEAD_WINDOWS:-}" FM_FAKE_GHOST_WINDOWS="${FM_FAKE_GHOST_WINDOWS:-}" PATH="$FAKEBIN_DIR:$PATH" \
     "$LEAD" "$@" 2>&1
 }
 
@@ -196,6 +222,12 @@ test_bad_leader_values_are_refused_before_any_record() {
   assert_contains "$out" "endpoint is dead" "the dead-leader refusal must name the cause"
   assert_absent "$HOME_DIR/state/c4.meta" "a refused spawn must publish no meta"
   assert_absent "$HOME_DIR/state/.spawn-c4.lock" "a refused spawn must leave no lock behind"
+  # A killed window whose session lives: tmux 3.7's display-message answers
+  # for the current window, so only the exact inventory tells the truth.
+  out=$(FM_FAKE_GHOST_WINDOWS=fm-lead-a run_spawn "$HOME_DIR" "$PROJ_DIR" c4g --leader lead-a); status=$?
+  [ "$status" -ne 0 ] || fail "a leader whose window is gone must be refused even though display-message still answers"$'\n'"$out"
+  assert_contains "$out" "endpoint is dead" "the gone-window refusal must name the cause"
+  assert_absent "$HOME_DIR/state/c4g.meta" "a refused spawn must publish no meta"
 
   write_crewmate "$HOME_DIR" "$PROJ_DIR" led-one lead-a
   out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" c5 --leader led-one); status=$?
@@ -286,7 +318,7 @@ test_lead_crew_lists_a_leaders_crewmates() {
   [ "$(printf '%s\n' "$out" | grep -c '^c[12] ')" = 2 ] || fail "crew must list exactly the two crewmates"$'\n'"$out"
   [ "$(printf '%s\n' "$out" | sed -n '1p' | cut -d' ' -f1)" = c1 ] || fail "crew must list crewmates sorted by id"$'\n'"$out"
   assert_contains "$out" "c1 kind=ship mode=no-mistakes endpoint=alive window=firstmate:fm-c1" "crew must print each crewmate's kind, mode, endpoint and window"
-  assert_contains "$out" "c2 kind=ship mode=no-mistakes endpoint=dead window=firstmate:fm-c2" "crew must read the endpoint the way the digest does"
+  assert_contains "$out" "c2 kind=ship mode=no-mistakes endpoint=dead window=firstmate:fm-c2" "crew must read the endpoint with fm-lead-lib's liveness read"
   assert_not_contains "$out" "other" "crew must not list another leader's crewmate"
 
   out=$(run_lead "$HOME_DIR" crew --leader lone); status=$?

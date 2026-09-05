@@ -2,9 +2,10 @@
 # bin/fm-lead-lib.sh - the branch-leader chain: which task of this home leads
 # which crewmates, and the four-crewmate ceiling.
 #
-# Sourced by bin/fm-spawn.sh (--leader) and bin/fm-lead.sh. Callers must have
-# sourced bin/fm-backend.sh first (fm_meta_get, fm_backend_of_meta,
-# fm_backend_target_of_meta, fm_backend_target_exists).
+# Sourced by bin/fm-spawn.sh (--leader), bin/fm-lead.sh, bin/fm-crew-vitals.sh
+# and bin/fm-trim-event.sh. Callers must have sourced bin/fm-backend.sh first
+# (fm_meta_get, fm_backend_of_meta, fm_backend_target_of_meta,
+# fm_backend_agent_alive, fm_backend_target_exists).
 #
 # The chain is one meta line, written only by fm-spawn and removed with the
 # record by teardown:
@@ -17,9 +18,17 @@
 # A leader is a ship or scout task of this home that was spawned as one
 # (bin/fm-spawn.sh --leads writes leads=1 into its record and leaves its trim
 # window where the harness puts it; bin/fm-compact-lib.sh), whose record
-# exists, whose endpoint answers the same cheap presence read the session-start
-# digest uses for its "endpoint: alive" line, and which is not itself led
+# exists, whose endpoint holds a live agent, and which is not itself led
 # (chains are one level deep). A secondmate never leads this home's crewmates.
+#
+# "Holds a live agent" is bin/fm-backend.sh's recovery-grade read
+# (fm_backend_agent_alive: the exact window inventory plus the foreground
+# process), not the digest's cheap presence read alone: on tmux 3.7 that cheap
+# read (display-message -t session:window) answers for the session's current
+# window when the named window is gone, so a killed leader window would read
+# as alive. Where the recovery-grade read cannot classify (an ambiguous or
+# unreadable foreground, a backend without a classifier) the cheap read
+# decides, as it does for the digest's "endpoint: alive" line.
 #
 # FM_LEAD_MAX_CREW (4) is the ceiling on recorded crewmates per leader; the
 # spawn takes the fifth only after one of the four is torn down. The spawn
@@ -63,6 +72,10 @@ fm_lead_endpoint_state() {  # <meta-file> <task-id> -> alive|dead|unknown
   [ -n "$window" ] || { printf 'unknown'; return 0; }
   target=$(fm_backend_target_of_meta "$meta")
   backend=$(fm_backend_of_meta "$meta")
+  case "$(fm_backend_agent_alive "$backend" "${target:-$window}" 2>/dev/null)" in
+    alive) printf 'alive'; return 0 ;;
+    dead) printf 'dead'; return 0 ;;
+  esac
   if fm_backend_target_exists "$backend" "${target:-$window}" "fm-$id"; then
     printf 'alive'
   else

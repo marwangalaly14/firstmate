@@ -5,9 +5,10 @@
 #   bin/fm-spawn.sh --leader writes; bin/fm-lead-lib.sh owns the chain), one
 #   per line, sorted by id:
 #     <id> kind=<ship|scout> mode=<mode|-> endpoint=<alive|dead|unknown> window=<endpoint>
-#   endpoint is the same cheap presence read the session-start digest uses, not
-#   a full state read; bin/fm-crew-state.sh <id> owns the crewmate's current
-#   state. A leader with no crewmates prints one "no crewmates recorded" line
+#   endpoint is bin/fm-lead-lib.sh's liveness read (fm-backend's recovery-grade
+#   agent read, then the digest's cheap presence read where that cannot
+#   classify), not a full state read; bin/fm-crew-state.sh <id> owns the
+#   crewmate's current state. A leader with no crewmates prints one "no crewmates recorded" line
 #   to stderr and exits 0. A leader with no record in this home, a missing
 #   --leader, or an unknown verb is refused with exit 1. A leader is a task
 #   spawned with bin/fm-spawn.sh --leads (leads=1 in its record); crew lists
