@@ -28,6 +28,11 @@
 #     repeats looks at the last 30 tool calls for the same tool with the same
 #     input three or more times (loop), the same file read five or more times
 #     (reads), or an A-B-A-B alternation four times (alternates).
+#   busy, quiet_for (--json only): whether the transcript's last conversation
+#     row is a finished turn (an assistant row with no tool call in it) or not
+#     (a tool call in flight, or a prompt or tool result the model has not
+#     answered), and the seconds since that row. bin/fm-crew-signals.sh reads
+#     them for its stall signal; the card does not print them.
 #   the status word: the state of the last line of state/<id>.status, an
 #     EVENT, not current state; bin/fm-crew-state.sh owns the current state.
 #   mark: trim_mark= in state/<id>.meta; a leader has none by design.
@@ -172,7 +177,7 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
     def epoch_or_null($s): if $s == "" then null else ($s | tonumber) end;
     reduce (inputs | fromjson? // empty) as $r (
       {head: null, first_head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
-       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null};
+       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null, last_conv: null};
       .rows += 1
       | if $r.type == "assistant" and ($r.message.usage? // null) != null then
           ($r.message.usage) as $u
@@ -194,6 +199,9 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
             else . end
           | .calls += [ ($r.message.content // []) | if type == "array" then map(select(.type == "tool_use") | {name: (.name // "?"), sig: sig(.), file: file_of(.), short: short(.), ts: ($r | ts)}) else [] end ] | .calls |= flatten
           | .calls |= (if length > 30 then .[-30:] else . end)
+          | .last_conv = {kind: (if (($r.message.content // []) | if type == "array" then map(select(.type == "tool_use")) | length else 0 end) > 0 then "call" else "turn" end), ts: ($r | ts)}
+        elif $r.type == "user" then
+          .last_conv = {kind: "input", ts: ($r | ts)}
         elif $r.type == "system" and $r.subtype == "compact_boundary" then
           .trims += [{trigger: ($r.compactMetadata.trigger // "?"), head_before: .head, pre: ($r.compactMetadata.preTokens // null), post: ($r.compactMetadata.postTokens // null), ts: ($r | ts)}]
         else . end
@@ -265,6 +273,8 @@ vitals_json() {  # <id> -> one JSON object on stdout
       trims: (if $t == null then null else ($t.trims | map({trigger, head_before, pre, post, ts})) end),
       last_call: (if $t == null then null else $t.last_call end),
       last_call_age: (if $t == null or $t.last_call == null or $t.last_call.ts == null then null else ($now - $t.last_call.ts) end),
+      busy: (if $t == null or $t.last_conv == null then null else ($t.last_conv.kind != "turn") end),
+      quiet_for: (if $t == null or $t.last_conv == null or $t.last_conv.ts == null then null else ($now - $t.last_conv.ts) end),
       repeats: (if $t == null then null else $t.repeats end),
       spend: (if $t == null then null else $t.spend end),
       spend_per_turn: (if $t == null or $t.turns == 0 then null else (($t.spend / $t.turns) | floor) end),

@@ -113,6 +113,79 @@ SH
 # A per-id override FM_FAKE_CREW_STATE_<sanitized-id> wins; otherwise the shared
 # FM_FAKE_CREW_STATE; otherwise an unknown verdict (NOT provably working), the
 # safe default so a test that forgets to set one surfaces rather than absorbs.
+# The fake tmux the chain suites (fm-lead-route-up, fm-crew-signals) read a
+# leader's liveness through, the shape tests/fm-lead-steer.test.sh drives
+# fm-lead with: `list-windows -t <session> -F '#{window_name}'` lists every
+# window a record in FM_FAKE_STATE names except FM_FAKE_GONE_WINDOWS; the pane
+# command is zsh for FM_FAKE_SHELL_WINDOWS (an agent that died to its shell)
+# and claude otherwise; send-keys -l text (the doorbell) is logged to
+# FM_SEND_LOG; every capture-pane prints a fresh counter, so a watcher over it
+# never reads a stale pane and its only wakes are the ones a case asserts.
+make_fake_chain_tmux() {  # <fakebin>
+  cat > "$1/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+listed() {
+  local w
+  for w in ${FM_FAKE_GONE_WINDOWS:-}; do [ "$1" = "$w" ] && return 1; done
+  return 0
+}
+shell_only() {
+  local w
+  for w in ${FM_FAKE_SHELL_WINDOWS:-}; do [ "$1" = "$w" ] && return 0; done
+  return 1
+}
+target_window() {
+  local prev= a
+  for a in "$@"; do
+    [ "$prev" = "-t" ] && { printf '%s' "${a#*:}"; return 0; }
+    prev=$a
+  done
+}
+case "$*" in
+  *"#{pane_current_path}"*) printf '\n'; exit 0 ;;
+  *"#{pane_current_command}"*)
+    if shell_only "$(target_window "$@")"; then printf 'zsh\n'; else printf 'claude\n'; fi
+    exit 0 ;;
+  *cursor_y*) printf '1\n'; exit 0 ;;
+esac
+case "${1:-}" in
+  list-windows)
+    for meta in "${FM_FAKE_STATE:-/nonexistent}"/*.meta; do
+      [ -f "$meta" ] || continue
+      w=$(sed -n 's/^window=[^:]*://p' "$meta" | head -1)
+      [ -n "$w" ] || continue
+      listed "$w" && printf '%s\n' "$w"
+    done
+    exit 0 ;;
+  display-message)
+    listed "$(target_window "$@")" || exit 1
+    printf 'fakepane\n'; exit 0 ;;
+  send-keys)
+    shift
+    literal=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    [ "$literal" = 1 ] && printf '%s\n' "${1:-}" >> "${FM_SEND_LOG:-/dev/null}"
+    exit 0 ;;
+  capture-pane)
+    n=0
+    [ ! -f "${FM_FAKE_CAPTURE_COUNT:-/nonexistent}" ] || n=$(cat "$FM_FAKE_CAPTURE_COUNT")
+    n=$((n + 1))
+    [ -z "${FM_FAKE_CAPTURE_COUNT:-}" ] || printf '%s\n' "$n" > "$FM_FAKE_CAPTURE_COUNT"
+    printf '╭────╮\n│ %s │\n╰────╯\n' "$n"
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$1/tmux"
+}
+
 make_fake_crew_state() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/fm-crew-state.sh" <<'SH'

@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# tests/fm-crew-signals.test.sh - the chain's transcript signals: a led
+# crewmate's stall, loop or drift candidate rings its leader once per episode.
+#
+# bin/fm-crew-signals.sh reads the crewmate's card (bin/fm-crew-vitals.sh
+# --json over a synthetic transcript, a worktree and a logbook) and rings the
+# leader named by the crewmate's meta through bin/fm-send.sh: a loop (the same
+# command three times in the last 30 calls, or an A-B-A-B bounce), a stall (busy
+# with nothing new for FM_STUCK_CALL_SECS) and a drift candidate
+# (FM_DRIFT_TOKENS spent since the last commit with no logbook change over that
+# spend). The ledger data/<id>/signals/index keeps one row per signal and
+# signature, so the same episode is silent and a new signature rings again; an
+# unled crewmate never rings; a logbook that claims progress does not quiet a
+# loop the transcript shows; a dead leader gets one failed row and no send.
+# bin/fm-watch.sh runs the check once per FM_SIGNAL_CHECK_SECS per led crewmate
+# from its poll and never wakes First Mate for it. The detector is driven
+# directly; the watcher runs as a real subprocess over the chain's fake tmux.
+set -u
+
+# shellcheck source=tests/wake-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
+# shellcheck source=tests/transcript-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/transcript-helpers.sh"
+# shellcheck source=bin/fm-logbook-lib.sh
+. "$ROOT/bin/fm-logbook-lib.sh"
+
+SIGNALS="$ROOT/bin/fm-crew-signals.sh"
+WATCH="$ROOT/bin/fm-watch.sh"
+TMP_ROOT=$(fm_test_tmproot fm-crew-signals)
+TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
+NOW=$(date +%s)   # the real clock: the ledger, the watcher and the card all read it
+
+write_task() {  # <home> <id> [meta lines...]
+  local home=$1 id=$2
+  shift 2
+  fm_write_meta "$home/state/$id.meta" "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "project=/p" "harness=claude" "kind=ship" "mode=no-mistakes" "yolo=off" "$@"
+  mkdir -p "$home/data/$id"
+}
+
+# make_home <name>: HOME_DIR, STATE, DATA, FAKEBIN, CASE_ENV; lead-a leads c1
+# and c2, u1 is led by nobody. Every crewmate gets a worktree whose one commit
+# is 3,000 s old and a transcript that starts empty.
+make_home() {
+  HOME_DIR="$TMP_ROOT/$1/home"
+  STATE="$HOME_DIR/state"
+  DATA="$HOME_DIR/data"
+  mkdir -p "$STATE" "$DATA"
+  FAKEBIN=$(fm_fakebin "$TMP_ROOT/$1")
+  make_fake_chain_tmux "$FAKEBIN"
+  make_fake_crew_state "$FAKEBIN" >/dev/null
+  write_task "$HOME_DIR" lead-a "leads=1"
+  write_task "$HOME_DIR" c1 "leader=lead-a"
+  write_task "$HOME_DIR" c2 "leader=lead-a"
+  write_task "$HOME_DIR" u1
+  local id
+  for id in c1 c2 u1; do
+    make_worktree "$TMP_ROOT/$1/wt-$id" $((NOW - 3000))
+    printf 'worktree=%s\n' "$TMP_ROOT/$1/wt-$id" >> "$STATE/$id.meta"
+    : > "$HOME_DIR/$id.jsonl"
+    printf '%s\tstartup\ts-%s\t%s\t?\t?\n' "$((NOW - 3600))" "$id" "$HOME_DIR/$id.jsonl" >> "$DATA/$id/sessions.log"
+  done
+  CASE_ENV=(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA"
+    FM_FAKE_STATE="$STATE" FM_SEND_LOG="$HOME_DIR/send.log" FM_SEND_SETTLE=0
+    FM_CREW_STATE_BIN="$FAKEBIN/fm-crew-state.sh" FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+    FM_FAKE_CAPTURE_COUNT="$HOME_DIR/capture.count")
+}
+
+transcript() { printf '%s/%s.jsonl' "$HOME_DIR" "$1"; }  # <id>
+
+# A loop: the same command three times, the last one seconds ago.
+plant_loop() {  # <id> [command]
+  local cmd=${2:-bash tests/x.test.sh} t
+  t=$(transcript "$1")
+  {
+    row_assistant $((NOW - 90)) m1 100 0 0 10 "$(tool_bash "$cmd")"
+    row_assistant $((NOW - 60)) m2 100 0 0 10 "$(tool_bash "$cmd")"
+    row_assistant $((NOW - 30)) m3 100 0 0 10 "$(tool_bash "$cmd")"
+  } >> "$t"
+}
+
+run_signals() {  # [ENV=val...] -- <task-id>: sets RC, OUT, ERR
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+  shift
+  OUT=$(env "${CASE_ENV[@]}" ${envs[@]+"${envs[@]}"} "$SIGNALS" "$HOME_DIR" "$1" 2> "$HOME_DIR/signals.err")
+  RC=$?
+  ERR=$(cat "$HOME_DIR/signals.err")
+}
+
+inbox_body() {  # <record>
+  bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$1"
+}
+
+inbox_count() {  # <id>
+  local n=0 f
+  for f in "$STATE/$1.inbox"/*.msg; do [ -f "$f" ] && n=$((n + 1)); done
+  printf '%s' "$n"
+}
+
+newest_inbox_body() {  # <id>
+  local f last=
+  for f in "$STATE/$1.inbox"/*.msg; do [ -f "$f" ] && last=$f; done
+  [ -n "$last" ] || return 1
+  inbox_body "$last"
+}
+
+# The ledger's rows as "<signal> <result>" words, one per line.
+ledger_rows() {  # <id>
+  [ -f "$DATA/$1/signals/index" ] || return 0
+  cut -f2,4 "$DATA/$1/signals/index" | tr '\t' ' '
+}
+
+ledger_count() {  # <id>
+  [ -f "$DATA/$1/signals/index" ] || { printf 0; return 0; }
+  grep -c . "$DATA/$1/signals/index" || true
+}
+
+queue_records() {
+  [ -f "$STATE/.wake-queue" ] || { printf 0; return 0; }
+  grep -c . "$STATE/.wake-queue" || true
+}
+
+# --- 1-3. a loop rings once; the episode is silent; a new signature rings ----
+test_loop_rings_once_per_episode() {
+  local body t
+  make_home loop
+  plant_loop c1
+  run_signals -- c1
+  [ "$RC" -eq 0 ] || fail "the detector exits 0, got $RC: $ERR"
+  [ "$OUT" = "loop	rung	loop 3x Bash bash tests/x.test.sh in the last 30 calls" ] \
+    || fail "a planted loop is reported as rung, got: '$OUT' ($ERR)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the loop rings the leader once, inbox has $(inbox_count lead-a) records"
+  body=$(newest_inbox_body lead-a)
+  assert_contains "$body" "signal: c1 loop: loop 3x Bash bash tests/x.test.sh in the last 30 calls" "the ring opens with the signal line"
+  assert_contains "$body" "  last call  Bash \`bash tests/x.test.sh\`" "the ring carries the crewmate's card"
+  assert_contains "$body" "FM_HOME=$HOME_DIR bin/fm-lead.sh steer --leader lead-a c1 \"<one line>\"" "the ring says how to steer"
+  assert_contains "$body" "never from the crewmate's report; the judgment is yours" "the ring says what it is"
+  [ "$(ledger_rows c1)" = "loop rung" ] || fail "the ledger records the ring, got: $(ledger_rows c1)"
+  [ "$(awk -F '\t' 'NF != 6 { bad = 1 } END { exit bad }' "$DATA/c1/signals/index"; echo $?)" = 0 ] \
+    || fail "a ledger row has six tab-separated fields, got: $(cat "$DATA/c1/signals/index")"
+  [ "$(inbox_count u1)" -eq 0 ] && [ ! -e "$STATE/c1.inbox" ] || fail "nothing reaches the crewmate or anyone else"
+
+  # The same episode, checked again: silent, no second record, no second row.
+  run_signals -- c1
+  [ "$OUT" = "loop	silent	loop 3x Bash bash tests/x.test.sh in the last 30 calls" ] \
+    || fail "the same episode is silent on the next check, got: '$OUT'"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the same episode does not ring twice, inbox has $(inbox_count lead-a)"
+  [ "$(ledger_count c1)" -eq 1 ] || fail "the same episode adds no row, ledger has $(ledger_count c1)"
+
+  # The loop keeps going (a fourth run of the same command): still the same episode.
+  t=$(transcript c1)
+  row_assistant $((NOW - 20)) m4 100 0 0 10 "$(tool_bash 'bash tests/x.test.sh')" >> "$t"
+  run_signals -- c1
+  assert_contains "$OUT" "loop	silent	loop 4x" "a growing count is the same episode"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "a growing count does not ring again"
+
+  # A new shape, an A-B-A-B bounce, is a new signature and rings again.
+  {
+    row_assistant $((NOW - 16)) m5 100 0 0 10 "$(tool_bash 'ls')"
+    row_assistant $((NOW - 15)) m6 100 0 0 10 "$(tool_bash 'pwd')"
+    row_assistant $((NOW - 14)) m7 100 0 0 10 "$(tool_bash 'ls')"
+    row_assistant $((NOW - 13)) m8 100 0 0 10 "$(tool_bash 'pwd')"
+    row_assistant $((NOW - 12)) m9 100 0 0 10 "$(tool_bash 'ls')"
+    row_assistant $((NOW - 11)) m10 100 0 0 10 "$(tool_bash 'pwd')"
+    row_assistant $((NOW - 10)) m11 100 0 0 10 "$(tool_bash 'ls')"
+    row_assistant $((NOW - 9)) m12 100 0 0 10 "$(tool_bash 'pwd')"
+  } >> "$t"
+  run_signals -- c1
+  [ "$OUT" = "loop	rung	alternates 4x Bash ls / Bash pwd in the last 30 calls" ] \
+    || fail "a new signature rings again, got: '$OUT'"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "the new episode rings the leader, inbox has $(inbox_count lead-a)"
+  [ "$(ledger_rows c1)" = "loop rung
+loop rung" ] || fail "the ledger has one row per episode, got: $(ledger_rows c1)"
+  pass "a planted loop rings the leader once with the card and how to steer; the same episode is silent while it grows; a new signature rings again"
+}
+
+# --- 4. a stall rings while busy; an idle crewmate of the same age does not --
+test_stall_rings_only_while_busy() {
+  local t
+  make_home stall
+  # c1: a tool call in flight for 1,000 s.
+  t=$(transcript c1)
+  row_assistant $((NOW - 1000)) m1 100 0 0 10 "$(tool_bash 'bash tests/slow.test.sh')" >> "$t"
+  # c2: a finished turn 1,000 s ago, waiting for input.
+  t=$(transcript c2)
+  { row_assistant $((NOW - 1100)) m1 100 0 0 10 "$(tool_bash 'ls')"; row_assistant $((NOW - 1000)) m2 100 0 0 10; } >> "$t"
+
+  run_signals FM_STUCK_CALL_SECS=900 -- c1
+  case "$OUT" in
+    "stall	rung	busy with nothing new for 17m (bound 15m); last call Bash \`bash tests/slow.test.sh\`") ;;
+    *) fail "a call in flight past the bound rings a stall, got: '$OUT' ($ERR)" ;;
+  esac
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the stall rings the leader"
+  assert_contains "$(newest_inbox_body lead-a)" "signal: c1 stall: busy with nothing new for 17m" "the ring names the stall"
+  [ "$(cut -f3 "$DATA/c1/signals/index")" = "$((NOW - 1000))" ] \
+    || fail "the stall's signature is when the quiet began, got: $(cut -f3 "$DATA/c1/signals/index")"
+
+  run_signals FM_STUCK_CALL_SECS=900 -- c2
+  [ -z "$OUT" ] || fail "a finished turn is not a stall however old, got: '$OUT'"
+  [ ! -e "$DATA/c2/signals" ] || fail "an idle crewmate gets no ledger"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "an idle crewmate does not ring"
+
+  # Below the bound the same call in flight is not a stall.
+  run_signals FM_STUCK_CALL_SECS=2000 -- c1
+  [ -z "$OUT" ] || fail "a call in flight under the bound is not a stall, got: '$OUT'"
+
+  # A prompt the model has not answered is busy too.
+  t=$(transcript c2)
+  row_user $((NOW - 950)) >> "$t"
+  run_signals FM_STUCK_CALL_SECS=900 -- c2
+  assert_contains "$OUT" "stall	rung	busy with nothing new for 16m" "a prompt the model has not answered past the bound is a stall"
+  pass "a call in flight past the bound rings a stall with when the quiet began as its signature; a finished turn of the same age never does; under the bound nothing rings"
+}
+
+# --- 5. a drift candidate rings; a logbook change over the spend quiets it ---
+test_drift_candidate_rings_without_a_logbook_change() {
+  local t logbook
+  make_home drift
+  # 6,000 fresh tokens since the 3,000 s old commit; the logbook is the template.
+  t=$(transcript c1)
+  {
+    row_assistant $((NOW - 2000)) m1 1000 1000 0 100 "$(tool_bash 'ls')"
+    row_assistant $((NOW - 1500)) m2 1000 1000 0 100 "$(tool_bash 'pwd')"
+    row_assistant $((NOW - 1000)) m3 1000 500 0 100 "$(tool_bash 'ls -a')"
+    row_assistant $((NOW - 10)) m4 100 0 0 100
+  } >> "$t"
+  logbook=$(fm_logbook_path "$DATA" c1)
+  fm_logbook_template c1 > "$logbook"
+
+  run_signals FM_DRIFT_TOKENS=5000 -- c1
+  case "$OUT" in
+    "drift?	rung	6.0K tokens since the last commit (50m) with no logbook change over that spend (bound 5.0K; logbook untouched)") ;;
+    *) fail "spend past the bound with an untouched logbook rings drift?, got: '$OUT' ($ERR)" ;;
+  esac
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "drift? rings the leader"
+  assert_contains "$(newest_inbox_body lead-a)" "signal: c1 drift?: 6.0K tokens since the last commit" "the ring names the candidate"
+  [ "$(ledger_rows c1)" = "drift? rung" ] || fail "the ledger records the candidate, got: $(ledger_rows c1)"
+
+  # The crewmate writes its logbook now: the spend since that change is nil,
+  # so there is no candidate at all.
+  printf '## Done\n- the tests pass\n## Next\n- the docs\n' > "$logbook"
+  run_signals FM_DRIFT_TOKENS=5000 -- c1
+  [ -z "$OUT" ] || fail "a logbook change over the spend quiets the candidate, got: '$OUT'"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "no ring after the logbook change"
+
+  # A logbook last changed before the spend: the candidate is back, as a new
+  # episode (the change it measures from moved).
+  set_mtime "$logbook" $((NOW - 2500))
+  run_signals FM_DRIFT_TOKENS=5000 -- c1
+  case "$OUT" in
+    "drift?	rung	6.0K tokens since the last commit (50m) with no logbook change over that spend (bound 5.0K; logbook 42m old)") ;;
+    *) fail "spend past the bound since the logbook's last change rings drift? again, got: '$OUT'" ;;
+  esac
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "the new episode rings"
+  [ "$(ledger_count c1)" -eq 2 ] || fail "two episodes, two rows, got $(ledger_count c1)"
+
+  # A commit lands: the spend since it is nil; silent.
+  GIT_COMMITTER_DATE="@$NOW" git -C "$TMP_ROOT/drift/wt-c1" -c user.name=t -c user.email=t@t commit -q --allow-empty -m landed --date="@$NOW"
+  run_signals FM_DRIFT_TOKENS=5000 -- c1
+  [ -z "$OUT" ] || fail "a fresh commit quiets the candidate, got: '$OUT'"
+  pass "spend past the bound since the last commit with no logbook change rings drift? once per episode; a logbook change over the spend, or a commit, quiets it"
+}
+
+# --- 6. an unled crewmate never rings ----------------------------------------
+test_unled_crewmate_never_rings() {
+  make_home unled
+  plant_loop u1
+  run_signals FM_STUCK_CALL_SECS=1 FM_DRIFT_TOKENS=1 -- u1
+  [ "$RC" -eq 0 ] || fail "an unled crewmate exits 0, got $RC: $ERR"
+  [ -z "$OUT" ] || fail "an unled crewmate prints nothing, got: '$OUT'"
+  [ ! -e "$DATA/u1/signals" ] || fail "an unled crewmate gets no ledger"
+  [ ! -s "$HOME_DIR/send.log" ] || fail "nothing was sent anywhere: $(cat "$HOME_DIR/send.log")"
+  [ "$(inbox_count lead-a)" -eq 0 ] || fail "no leader was rung"
+  # And a crewmate whose transcript has not begun yields nothing either.
+  rm -f "$DATA/c1/sessions.log"
+  run_signals FM_STUCK_CALL_SECS=1 -- c1
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] || fail "no transcript, no signal, got rc=$RC '$OUT'"
+  # Usage is the one non-zero exit.
+  env "${CASE_ENV[@]}" "$SIGNALS" "$HOME_DIR" >/dev/null 2>&1; [ $? -eq 2 ] || fail "a missing task id exits 2"
+  pass "an unled crewmate never rings and gets no ledger; a transcript that has not begun yields nothing; only usage exits non-zero"
+}
+
+# --- 7. the logbook's claim does not quiet the transcript's loop -------------
+test_transcript_beats_the_report() {
+  local logbook
+  make_home report
+  plant_loop c1
+  logbook=$(fm_logbook_path "$DATA" c1)
+  printf '## Done\n- all tests green, the story is finished\n## Next\n- open the PR\n' > "$logbook"
+  run_signals -- c1
+  assert_contains "$OUT" "loop	rung	loop 3x Bash bash tests/x.test.sh" "the loop rings although the logbook claims the work is done"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the leader is rung"
+  assert_not_contains "$(newest_inbox_body lead-a)" "all tests green" "nothing the crewmate wrote enters the ring"
+  pass "a logbook that claims progress does not quiet the loop the transcript shows: the detector reads the transcript, not the report"
+}
+
+# --- 8. the watcher runs the check on its cadence and never wakes First Mate --
+test_watcher_rings_from_its_poll_and_stays_quiet() {
+  local WOUT WPID i
+  make_home watcher
+  plant_loop c1
+  WOUT="$HOME_DIR/watch.out"
+  : > "$WOUT"
+  env "${CASE_ENV[@]}" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_STALE_ESCALATE_SECS=999 FM_SIGNAL_CHECK_SECS=2 "$WATCH" > "$WOUT" 2> "$HOME_DIR/watch.err" &
+  WPID=$!
+  i=0
+  until [ "$(ledger_count c1)" -ge 1 ] || [ "$i" -ge 40 ]; do sleep 0.25; i=$((i + 1)); done
+  [ "$(ledger_rows c1)" = "loop rung" ] || { kill "$WPID" 2>/dev/null; fail "the watcher's poll rings a led crewmate's loop, ledger: $(ledger_rows c1); err: $(tail -5 "$HOME_DIR/watch.err")"; }
+  [ "$(inbox_count lead-a)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "the leader was rung once from the poll"; }
+  assert_grep "signal check c1: loop	rung	loop 3x Bash bash tests/x.test.sh" "$STATE/.watch-triage.log" "the triage log carries the verdict"
+  # Two more cadences later: the same episode, no second ring, no wake.
+  sleep 5
+  kill -0 "$WPID" 2>/dev/null || fail "the watcher is still running (no wake for a signal), out: $(cat "$WOUT")"
+  [ "$(ledger_count c1)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "the same episode is checked again but not rung again, ledger: $(ledger_rows c1)"; }
+  [ "$(inbox_count lead-a)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "still one record"; }
+  [ "$(queue_records)" -eq 0 ] || { kill "$WPID" 2>/dev/null; fail "First Mate is not woken for a signal, queue: $(cat "$STATE/.wake-queue")"; }
+  [ ! -e "$DATA/u1/signals" ] || { kill "$WPID" 2>/dev/null; fail "the poll checks led crewmates only"; }
+  [ "$(grep -c 'signal check c1: loop	silent' "$STATE/.watch-triage.log")" -ge 1 ] || { kill "$WPID" 2>/dev/null; fail "the later checks log the silent verdict"; }
+  # The cadence: one check per FM_SIGNAL_CHECK_SECS, not one per poll (a
+  # one-second poll over these seven-odd seconds would log seven or more).
+  [ "$(grep -c 'signal check c1:' "$STATE/.watch-triage.log")" -le 5 ] || { kill "$WPID" 2>/dev/null; fail "the check runs once per cadence, not per poll: $(grep -c 'signal check c1:' "$STATE/.watch-triage.log") checks"; }
+  kill "$WPID" 2>/dev/null || true; wait "$WPID" 2>/dev/null || true
+  pass "the watcher's poll runs the check for led crewmates only, on its cadence, rings the loop once, logs every verdict, and never wakes First Mate"
+}
+
+# --- 9. a dead leader gets one failed row and no send -----------------------
+test_dead_leader_is_recorded_once() {
+  make_home dead
+  plant_loop c1
+  run_signals FM_FAKE_GONE_WINDOWS=fm-lead-a -- c1
+  [ "$OUT" = "loop	failed:leader-dead	loop 3x Bash bash tests/x.test.sh in the last 30 calls" ] \
+    || fail "a dead leader is a failed ring, got: '$OUT' ($ERR)"
+  [ "$(inbox_count lead-a)" -eq 0 ] || fail "nothing is sent to a dead leader"
+  [ ! -s "$HOME_DIR/send.log" ] || fail "no doorbell rang"
+  [ "$(ledger_rows c1)" = "loop failed:leader-dead" ] || fail "the ledger records the failure, got: $(ledger_rows c1)"
+  run_signals FM_FAKE_GONE_WINDOWS=fm-lead-a -- c1
+  assert_contains "$OUT" "loop	silent" "the failed episode is not retried every check"
+  [ "$(ledger_count c1)" -eq 1 ] || fail "one row for the failed episode, got $(ledger_count c1)"
+  # A leader whose record is gone: no-record, once.
+  rm -f "$STATE/lead-a.meta"
+  rm -rf "$DATA/c1/signals"
+  run_signals -- c1
+  assert_contains "$OUT" "loop	failed:leader-no-record" "a leader with no record is a failed ring"
+  [ "$(queue_records)" -eq 0 ] || fail "no wake record either way"
+  pass "a dead or unrecorded leader gets one failed row and no send; the episode is not retried on every check; First Mate is not woken"
+}
+
+test_loop_rings_once_per_episode
+test_stall_rings_only_while_busy
+test_drift_candidate_rings_without_a_logbook_change
+test_unled_crewmate_never_rings
+test_transcript_beats_the_report
+test_watcher_rings_from_its_poll_and_stays_quiet
+test_dead_leader_is_recorded_once

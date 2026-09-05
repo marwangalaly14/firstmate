@@ -33,78 +33,13 @@ BLOCK='blocked: [key=stuck] the document gate refuses the playbook trigger'
 WORKING_STATE='state: working · source: run-step · validating (running)'
 IDLE_STATE='state: idle · source: none · stopped at its door'
 
-# The fake tmux (the shape tests/fm-lead-steer.test.sh drives fm-lead with):
-# `list-windows -t <session> -F '#{window_name}'` lists every window a record
-# in FM_FAKE_STATE names except FM_FAKE_GONE_WINDOWS; the pane command is zsh
-# for FM_FAKE_SHELL_WINDOWS (an agent that died to its shell) and claude
-# otherwise; send-keys -l text (the doorbell) is logged to FM_SEND_LOG; every
-# capture-pane prints a fresh counter, so a watcher over it never reads a
-# stale pane and its only wakes are the ones these cases assert.
+# The fake tmux the chain suites drive the leader's liveness with (its shape
+# is tests/wake-helpers.sh's make_fake_chain_tmux; the inventory and the pane
+# command decide who is alive, and the doorbell lands in FM_SEND_LOG).
 make_fakebin() {  # <dir>
   local fakebin
   fakebin=$(fm_fakebin "$1")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-listed() {
-  local w
-  for w in ${FM_FAKE_GONE_WINDOWS:-}; do [ "$1" = "$w" ] && return 1; done
-  return 0
-}
-shell_only() {
-  local w
-  for w in ${FM_FAKE_SHELL_WINDOWS:-}; do [ "$1" = "$w" ] && return 0; done
-  return 1
-}
-target_window() {
-  local prev= a
-  for a in "$@"; do
-    [ "$prev" = "-t" ] && { printf '%s' "${a#*:}"; return 0; }
-    prev=$a
-  done
-}
-case "$*" in
-  *"#{pane_current_path}"*) printf '\n'; exit 0 ;;
-  *"#{pane_current_command}"*)
-    if shell_only "$(target_window "$@")"; then printf 'zsh\n'; else printf 'claude\n'; fi
-    exit 0 ;;
-  *cursor_y*) printf '1\n'; exit 0 ;;
-esac
-case "${1:-}" in
-  list-windows)
-    for meta in "${FM_FAKE_STATE:-/nonexistent}"/*.meta; do
-      [ -f "$meta" ] || continue
-      w=$(sed -n 's/^window=[^:]*://p' "$meta" | head -1)
-      [ -n "$w" ] || continue
-      listed "$w" && printf '%s\n' "$w"
-    done
-    exit 0 ;;
-  display-message)
-    listed "$(target_window "$@")" || exit 1
-    printf 'fakepane\n'; exit 0 ;;
-  send-keys)
-    shift
-    literal=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -t) shift 2 ;;
-        -l) literal=1; shift ;;
-        *) break ;;
-      esac
-    done
-    [ "$literal" = 1 ] && printf '%s\n' "${1:-}" >> "${FM_SEND_LOG:-/dev/null}"
-    exit 0 ;;
-  capture-pane)
-    n=0
-    [ ! -f "${FM_FAKE_CAPTURE_COUNT:-/nonexistent}" ] || n=$(cat "$FM_FAKE_CAPTURE_COUNT")
-    n=$((n + 1))
-    [ -z "${FM_FAKE_CAPTURE_COUNT:-}" ] || printf '%s\n' "$n" > "$FM_FAKE_CAPTURE_COUNT"
-    printf '╭────╮\n│ %s │\n╰────╯\n' "$n"
-    exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
+  make_fake_chain_tmux "$fakebin"
   make_fake_crew_state "$fakebin" >/dev/null
   printf '%s\n' "$fakebin"
 }

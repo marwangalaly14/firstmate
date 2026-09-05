@@ -1262,9 +1262,53 @@ signal_files_actionable() {  # <status-file> ...
 # ring failed, or when the span carries any other captain-relevant line. An
 # unled crewmate never enters this path, and nothing here reaches the
 # crewmate.
+# The chain's other ring, the transcript signals: once per
+# FM_SIGNAL_CHECK_SECS (300) per led crewmate, the poll runs
+# bin/fm-crew-signals.sh, which reads the crewmate's card (the transcript,
+# the worktree's HEAD, the logbook's mtime) and rings the leader once per
+# episode of a stall, a loop or a drift candidate, keeping
+# data/<id>/signals/index. That script owns the readings and the ledger;
+# this loop owns only the cadence (kept in memory, so a restart checks at
+# once and the ledger keeps it from ringing twice) and writes the script's
+# verdict lines to the triage log. No wake record: First Mate is not told.
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 LEADER_ESCALATE_SECS=${FM_LEADER_ESCALATE_SECS:-1800}
 case "$LEADER_ESCALATE_SECS" in ''|*[!0-9]*) LEADER_ESCALATE_SECS=1800 ;; esac
+SIGNAL_CHECK_SECS=${FM_SIGNAL_CHECK_SECS:-300}
+case "$SIGNAL_CHECK_SECS" in ''|*[!0-9]*) SIGNAL_CHECK_SECS=300 ;; esac
+SIGNAL_CHECKED=''   # "<task>=<epoch>" words: when each led crewmate was last checked
+
+# 0 when the led crewmate's signal check is due, recording this check.
+signal_check_due() {  # <task> <now>
+  local task=$1 now=$2 pair kept='' last=''
+  for pair in $SIGNAL_CHECKED; do
+    case "$pair" in
+      "$task="*) last=${pair#*=} ;;
+      *) kept="$kept $pair" ;;
+    esac
+  done
+  if [ -n "$last" ] && [ $((now - last)) -lt "$SIGNAL_CHECK_SECS" ]; then
+    return 1
+  fi
+  SIGNAL_CHECKED="$kept $task=$now"
+  return 0
+}
+
+# Run the transcript-signal check for every led crewmate whose turn has come.
+led_signal_checks() {
+  local m task now line
+  now=$(date +%s)
+  for m in "$STATE"/*.meta; do
+    [ -f "$m" ] || continue
+    task=${m##*/}; task=${task%.meta}
+    [ "$(task_leader_of "$task")" != '?' ] || continue
+    signal_check_due "$task" "$now" || continue
+    "$SCRIPT_DIR/fm-crew-signals.sh" "$FM_HOME" "$task" 2>/dev/null | while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      triage_log "signal check $task: $line"
+    done
+  done
+}
 
 door_ledger() { printf '%s/%s/doors/index' "$DATA" "$1"; }  # <task>
 
@@ -1914,6 +1958,9 @@ while :; do
   # The chain's one bounded escalation (leader_doors_overdue): a led crewmate's
   # door its leader has held past the bound wakes First Mate once, here.
   leader_doors_overdue
+  # The chain's transcript signals (led_signal_checks): a led crewmate's
+  # stall, loop or drift candidate rings its leader, never First Mate.
+  led_signal_checks
 
   # On the first changed signal, linger one grace period and re-scan before
   # classifying: a crewmate's final status write and the same turn's turn-end

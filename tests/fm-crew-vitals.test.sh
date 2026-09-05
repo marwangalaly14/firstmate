@@ -12,35 +12,12 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=bin/fm-logbook-lib.sh
 . "$ROOT/bin/fm-logbook-lib.sh"
+# shellcheck source=tests/transcript-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/transcript-helpers.sh"
 
 VITALS="$ROOT/bin/fm-crew-vitals.sh"
 TMP_ROOT=$(fm_test_tmproot fm-crew-vitals)
 NOW=1757100000   # 2026-09-05T19:20:00Z, the fixed clock every case runs under
-
-iso() {  # <epoch> -> ISO timestamp with milliseconds, as the harness writes it
-  if date -u -r "$1" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null; then return 0; fi
-  date -u -d "@$1" +%Y-%m-%dT%H:%M:%S.000Z
-}
-
-# Transcript rows, one per line, in the harness's own shapes.
-row_assistant() {  # <epoch> <msg-id> <in> <cc> <cr> <out> [<tool-use json>...]
-  local ts id in cc cr out content
-  ts=$(iso "$1"); id=$2; in=$3; cc=$4; cr=$5; out=$6
-  shift 6
-  content='[{"type":"text","text":"ok"}]'
-  if [ $# -gt 0 ]; then
-    content=$(printf '%s\n' "$@" | jq -s -c '.')
-  fi
-  printf '{"type":"assistant","uuid":"u-%s","timestamp":"%s","message":{"id":"%s","role":"assistant","content":%s,"usage":{"input_tokens":%s,"cache_creation_input_tokens":%s,"cache_read_input_tokens":%s,"output_tokens":%s}}}\n' \
-    "$id-$RANDOM" "$ts" "$id" "$content" "$in" "$cc" "$cr" "$out"
-}
-tool_bash() { printf '{"type":"tool_use","id":"t%s","name":"Bash","input":{"command":"%s","description":"%s"}}' "$RANDOM" "$1" "${2:-run it}"; }
-tool_read() { printf '{"type":"tool_use","id":"t%s","name":"Read","input":{"file_path":"%s"%s}}' "$RANDOM" "$1" "${2:+,\"offset\":$2}"; }
-row_boundary() {  # <epoch> <trigger> <pre> <post>
-  printf '{"type":"system","subtype":"compact_boundary","uuid":"b-%s","timestamp":"%s","compactMetadata":{"trigger":"%s","preTokens":%s,"postTokens":%s}}\n' "$RANDOM" "$(iso "$1")" "$2" "$3" "$4"
-}
-row_user() { printf '{"type":"user","uuid":"x-%s","timestamp":"%s","message":{"role":"user","content":"go"}}\n' "$RANDOM" "$(iso "$1")"; }
-row_noise() { printf '{"type":"file-history-snapshot","messageId":"m"}\n'; }
 
 # A home with one recorded task and its inputs.
 make_home() {  # <name> -> home
@@ -59,25 +36,6 @@ write_task() {  # <home> <id> <kind> [meta lines...]
 
 point_transcript() {  # <home> <id> <transcript-path>
   printf '%s\tstartup\ts-%s\t%s\t?\t?\n' "$((NOW - 3600))" "$2" "$3" >> "$1/data/$2/sessions.log"
-}
-
-make_worktree() {  # <path> <commit-epoch>
-  local wt=$1 when=$2
-  mkdir -p "$wt"
-  git -C "$wt" init -q
-  git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base --date="@$when" 2>/dev/null \
-    || GIT_COMMITTER_DATE="@$when" git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base --date="@$when"
-  GIT_COMMITTER_DATE="@$when" git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty --amend --no-edit --date="@$when"
-}
-
-set_mtime() {  # <file> <epoch>
-  touch -t "$(if date -u -r "$2" +%Y%m%d%H%M.%S 2>/dev/null; then :; else date -u -d "@$2" +%Y%m%d%H%M.%S; fi)" "$1" 2>/dev/null \
-    || touch -d "@$2" "$1"
-  # touch -t reads local time; set the exact epoch through python when present.
-  command -v python3 >/dev/null 2>&1 && python3 - "$1" "$2" <<'PY'
-import os, sys
-os.utime(sys.argv[1], (int(sys.argv[2]), int(sys.argv[2])))
-PY
 }
 
 run_vitals() {  # <home> [args...]
@@ -262,13 +220,14 @@ test_growth_changes_only_what_changed_and_partial_lines_are_skipped() {
   row_assistant $((NOW - 20)) m3 3000 0 0 100 "$(tool_bash 'pwd')" >> "$t"
   j2=$(run_vitals "$home" g1 --json)
   changed=$(jq -r -n --argjson a "$j1" --argjson b "$j2" '[$a | keys[] | select($a[.] != $b[.])] | sort | join(" ")')
-  [ "$changed" = "head last_call last_call_age peak spend spend_per_turn turns" ] \
+  # m2 ended its turn (a text row); m3 is a call in flight, so busy and quiet_for move too.
+  [ "$changed" = "busy head last_call last_call_age peak quiet_for spend spend_per_turn turns" ] \
     || fail "a grown transcript changes only the fields that changed, got: $changed"
   # A half-written trailing line (the harness mid-append) is skipped, not fatal.
   printf '{"type":"assistant","uuid":"partial","timestamp":"2026-09' >> "$t"
   [ "$(run_vitals "$home" g1 --json | jq -c 'del(.now)')" = "$(printf '%s' "$j2" | jq -c 'del(.now)')" ] \
     || fail "a partial trailing line must not change the numbers or fail the read"
-  pass "a transcript that grew changes only head, peak, turns, spend, rate and the last call; a partial trailing line is skipped"
+  pass "a transcript that grew changes only head, peak, turns, spend, rate, the last call and busy/quiet_for; a partial trailing line is skipped"
 }
 
 test_scopes_and_refusals() {
