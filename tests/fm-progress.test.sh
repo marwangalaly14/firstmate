@@ -235,10 +235,18 @@ test_the_stripper_deletes_ids_and_never_a_word() {
   EXPECTED+=("Cut the crewmate's fresh head from 1560000 to 1400000 tokens.")
   CASES+=("The order at epoch 1757100000 was typed into the pane.")
   EXPECTED+=("The order at epoch 1757100000 was typed into the pane.")
+  # A hex run inside a longer token, at every boundary: its middle, its back
+  # and - the shape the guard used to eat - its front.
   CASES+=("The file bin/fm-1234abc.sh was added.")
   EXPECTED+=("The file bin/fm-1234abc.sh was added.")
   CASES+=("Version v1.2.3-abc1234 shipped.")
   EXPECTED+=("Version v1.2.3-abc1234 shipped.")
+  CASES+=("Added 1234abc.md to the docs index.")
+  EXPECTED+=("Added 1234abc.md to the docs index.")
+  CASES+=("Read a1b2c3d/probe.log for the numbers.")
+  EXPECTED+=("Read a1b2c3d/probe.log for the numbers.")
+  CASES+=("The deadb33f-fix branch landed.")
+  EXPECTED+=("The deadb33f-fix branch landed.")
   CASES+=("The worktree under worktrees/1193994fc784 is the crewmate's own.")
   EXPECTED+=("The worktree under worktrees/1193994fc784 is the crewmate's own.")
   CASES+=("The line was effaced by the editor.")

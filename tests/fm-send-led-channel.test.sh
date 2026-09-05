@@ -6,11 +6,14 @@
 # target whose record names a leader that holds a live agent, and prints the
 # leader's steer command instead, unless the send carries one of three marks,
 # each recorded in the inbox record's header: --from-leader <id> matching the
-# recorded leader (bin/fm-lead.sh passes it), --captain (the WHOLE message must
-# stand verbatim inside the brief's "## Captain's intent", so no work can ride
-# along with a captain line), or --lifecycle
-# <relaunch|teardown|handover|escalation>. --key stays open (Enter, Escape and
-# C-c are lifecycle). A dead or missing leader reopens the channel; an unled
+# recorded leader (bin/fm-lead.sh passes it), --captain (the WHOLE message
+# must stand verbatim inside the brief's "## Captain's intent", so no work
+# can ride along with a captain line), or --lifecycle
+# <relaunch|teardown|handover|escalation> (whose delivered line fm-send
+# composes from the action itself, with the sender's own words riding beside
+# it, bounded and labelled, as --note, so no typed instruction can wear a
+# lifecycle mark). --key stays open (Enter, Escape and C-c are lifecycle).
+# A dead or missing leader reopens the channel; an unled
 # crewmate is untouched. The contract lives in fm-send's header ("The led
 # channel").
 set -u
@@ -211,17 +214,16 @@ test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it() {
 
 # --- 4. lifecycle marks, --key, and one mark at a time ------------------------
 test_lifecycle_marks_land_and_are_recorded() {
-  local home rec
+  local home
   make_home lifecycle; home=$HOME_DIR
-  run_send "$home" -- c1 --lifecycle relaunch "your pane died; relaunching you in place, your worktree is untouched"
+  run_send "$home" -- c1 --lifecycle relaunch
   [ "$RC" -eq 0 ] || fail "--lifecycle relaunch must land: $ERR"
-  rec="$home/state/c1.inbox/001.msg"
-  assert_contains "$(record_header "$rec")" "mark=lifecycle:relaunch" "the record's header carries the lifecycle mark and its action"
+  assert_contains "$(record_header "$home/state/c1.inbox/001.msg")" "mark=lifecycle:relaunch" "the record's header carries the lifecycle mark and its action"
   run_send "$home" -- c1 --lifecycle reboot "x"
   [ "$RC" -ne 0 ] || fail "--lifecycle outside the allowlist must be refused"
   assert_contains "$ERR" "relaunch, teardown, handover, escalation" "the refusal names the allowlist"
   printf 'blocked: [key=stuck] the suite loops on the same failure\n' > "$home/state/c1.status"
-  run_send "$home" -- c1 --resolve-key stuck --lifecycle escalation "the leader has been silent 40 minutes; drop the retry loop and read the log once"
+  run_send "$home" -- c1 --resolve-key stuck --lifecycle escalation --note "the leader has been silent 40 minutes"
   [ "$RC" -eq 0 ] || fail "an escalated door is First Mate's to answer with --lifecycle escalation: $ERR"
   assert_contains "$(cat "$home/state/c1.status")" 'resolved [key=stuck]: answered:' "the door closes"
   assert_contains "$(record_header "$home/state/c1.inbox/002.msg")" "mark=lifecycle:escalation" "the answer's record carries the mark"
@@ -233,6 +235,57 @@ test_lifecycle_marks_land_and_are_recorded() {
   run_send "$home" -- c1 --lifecycle relaunch --key Enter
   [ "$RC" -ne 0 ] || fail "a mark with --key must be refused (a key is lifecycle already)"
   pass "--lifecycle <action> lands with mark=lifecycle:<action>, answers an escalated door, refuses actions outside the allowlist; --key stays open; one mark per send and none with --key"
+}
+
+# --- 4b. the lifecycle body is generated, the note rides beside it labelled ----
+# The captain's ruling: no typed instruction can wear a lifecycle mark, so the
+# delivered line is composed from the ACTION and a sender's note is bounded,
+# labelled and never merged into it. Proved both directions - a work
+# instruction under a lifecycle mark is refused before anything is written or
+# rung, and a generated line with a note lands with the note behind its label.
+test_the_lifecycle_body_is_generated_and_a_note_rides_beside_it() {
+  local home note plain withnote teardown_body tail
+  make_home lifecyclebody; home=$HOME_DIR
+  run_send "$home" -- c1 --lifecycle relaunch "rebase onto main and re-run the failing test before you do anything else"
+  [ "$RC" -ne 0 ] || fail "a typed work instruction under a lifecycle mark must be refused, got:"$'\n'"$OUT"
+  assert_contains "$ERR" "composes its own line from the action" "the refusal says the body is generated"
+  assert_contains "$ERR" "--note" "the refusal points at the note"
+  assert_contains "$ERR" "Nothing was sent" "the refusal says nothing went out"
+  [ "$(records "$home" c1)" -eq 0 ] || fail "a refused lifecycle send writes no record"
+  [ ! -s "$home/send.log" ] || fail "a refused lifecycle send rings no doorbell:"$'\n'"$(cat "$home/send.log")"
+
+  run_send "$home" -- c1 --lifecycle relaunch
+  [ "$RC" -eq 0 ] || fail "a lifecycle send with no text lands on its generated line: $ERR"
+  plain=$(inbox_body "$home/state/c1.inbox/001.msg")
+  [ -n "$plain" ] || fail "the generated lifecycle line is not empty"
+  run_send "$home" -- c1 --lifecycle teardown
+  [ "$RC" -eq 0 ] || fail "teardown lands: $ERR"
+  teardown_body=$(inbox_body "$home/state/c1.inbox/002.msg")
+  [ "$teardown_body" != "$plain" ] || fail "the line is composed FROM the action: relaunch and teardown must not read alike"
+
+  note="lead-b picks this up at 14:00"
+  run_send "$home" -- c1 --lifecycle relaunch --note "$note"
+  [ "$RC" -eq 0 ] || fail "a generated lifecycle line with a note lands: $ERR"
+  withnote=$(inbox_body "$home/state/c1.inbox/003.msg")
+  [ "${withnote#"$plain"}" != "$withnote" ] \
+    || fail "the generated line is unchanged by the note and stands first, got:"$'\n'"$withnote"
+  tail=${withnote#"$plain"}
+  assert_contains "$tail" "sender's note" "the note rides under a label naming it the sender's own words"
+  [ "${tail%"$note"}" != "$tail" ] \
+    || fail "the note stands last, behind its label, never merged into the generated line: $tail"
+  case "$plain" in *"$note"*) fail "the note is never merged into the generated line" ;; esac
+
+  run_send "$home" -- c1 --lifecycle relaunch --note "$(printf 'x%.0s' $(seq 1 201))"
+  [ "$RC" -ne 0 ] || fail "a note past the bound must be refused"
+  assert_contains "$ERR" "the bound is 200" "the refusal names the bound"
+  run_send "$home" -- c1 --lifecycle relaunch --note "first line
+second line"
+  [ "$RC" -ne 0 ] || fail "a multi-line note must be refused"
+  run_send "$home" -- c1 --note "$note"
+  [ "$RC" -ne 0 ] || fail "--note without a lifecycle mark must be refused"
+  assert_contains "$ERR" "needs --lifecycle" "the refusal says the note needs its action"
+  [ "$(records "$home" c1)" -eq 3 ] || fail "no refusal after the three landed sends wrote a record"
+  pass "a typed work instruction under a lifecycle mark is refused before anything is written or rung; the delivered line is composed from the action itself, and a sender's note is bounded to one line of 200 characters, delivered behind a label naming it the sender's own words and never merged into the generated line"
 }
 
 # --- 5. a dead or missing leader reopens the channel; the unled are untouched --
@@ -249,7 +302,7 @@ test_a_dead_or_missing_leader_reopens_the_channel() {
   run_send "$home" -- u1 "rebase onto main first"
   [ "$RC" -eq 0 ] || fail "an unled crewmate is untouched: $ERR"
   ! grep -q '^mark=' "$home/state/u1.inbox/001.msg" || fail "no mark on an unled crewmate's record"
-  run_send "$home" -- u1 --lifecycle teardown "landing is confirmed; cleanup follows"
+  run_send "$home" -- u1 --lifecycle teardown --note "landing is confirmed; cleanup follows"
   [ "$RC" -eq 0 ] || fail "a lifecycle mark to an unled crewmate is accepted and recorded: $ERR"
   assert_contains "$(record_header "$home/state/u1.inbox/002.msg")" "mark=lifecycle:teardown" "the mark is recorded even where nothing required it"
   pass "a dead leader or a missing leader record reopens the channel with no mark line; an unled crewmate is untouched and still records a mark it was given"
@@ -273,6 +326,7 @@ test_the_leaders_mark_lands_and_the_wrong_leader_is_refused
 test_the_captains_words_land_only_when_the_brief_carries_them
 test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it
 test_lifecycle_marks_land_and_are_recorded
+test_the_lifecycle_body_is_generated_and_a_note_rides_beside_it
 test_a_dead_or_missing_leader_reopens_the_channel
 test_fm_lead_steer_and_trim_carry_the_mark
 

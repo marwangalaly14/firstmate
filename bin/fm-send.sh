@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--from-leader <id>|--captain|--lifecycle <action>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--from-leader <id>|--captain|--lifecycle <action> [--note <text>]] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -219,7 +219,19 @@
 #   --lifecycle <action>  relaunch, teardown, handover or escalation; the
 #                         action rides in the mark, so an escalated door (the
 #                         watcher's 30-minute wake, or the leader dead) is
-#                         answered with --resolve-key --lifecycle escalation
+#                         answered with --resolve-key --lifecycle escalation.
+#                         THE BODY IS GENERATED FROM THE ACTION
+#                         (fm_send_lifecycle_body): the caller supplies no
+#                         text and typed text alongside the mark is refused.
+#                         A sender's note may ride beside it with --note: at
+#                         most FM_SEND_LIFECYCLE_NOTE_MAX characters, one
+#                         line, delivered after the generated line behind a
+#                         label naming it the sender's own words, never
+#                         merged into it. Generated-plus-labelled rather than
+#                         a bound on the text because there is no mechanical
+#                         test of whether prose "is really lifecycle": the
+#                         two kinds of thing are made structurally different
+#                         instead of the difference being hoped for.
 # --key stays open (Enter, Escape and C-c are lifecycle) and takes no mark. A
 # dead leader, a missing leader record or no leader= at all leaves the channel
 # as it always was; a mark given where none was required is still recorded.
@@ -486,10 +498,27 @@ fi
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
 LED_MARK=
+LED_NOTE=
+LED_NOTE_GIVEN=0
 fm_send_set_mark() {  # <mark>: at most one of the led channel's marks per send
   [ -z "$LED_MARK" ] || { echo "error: one mark per send: --from-leader, --captain and --lifecycle name different senders (had $LED_MARK, got $1)" >&2; return 1; }
   LED_MARK=$1
 }
+# The one spelling of each lifecycle action, composed here and nowhere else.
+fm_send_lifecycle_body() {  # <action> -> the single line delivered for it
+  case "$1" in
+    relaunch) printf '%s' "Lifecycle: relaunch. Your pane was restarted in place; your worktree and your branch are untouched. Re-read your brief and your logbook, then carry on from where your transcript stops." ;;
+    teardown) printf '%s' "Lifecycle: teardown. This pane is being closed. Commit or discard what is open, write your logbook, and stop; start nothing new." ;;
+    handover) printf '%s' "Lifecycle: handover. This task changes hands. Write into your logbook where you are and what is left, then stop." ;;
+    escalation) printf '%s' "Lifecycle: escalation. A door you opened has been escalated past your leader and answered. Read the note beside this line, then carry on." ;;
+    *) return 1 ;;
+  esac
+}
+# The note's bound keeps a note a note: it carries context beside the action,
+# never the work, and it always stands AFTER the label, so nothing a sender
+# types can appear as though the lifecycle mechanism said it.
+FM_SEND_LIFECYCLE_NOTE_MAX=200
+FM_SEND_LIFECYCLE_NOTE_LABEL="-- [sender's note, the sender's own words, not part of this lifecycle action]"
 fm_send_add_resolve_key() {  # <key>
   local k=$1
   case "$k" in
@@ -545,6 +574,14 @@ while :; do
         *) echo "error: --lifecycle takes one of relaunch, teardown, handover, escalation (got '${v:-nothing}')" >&2; exit 1 ;;
       esac
       fm_send_set_mark "lifecycle:$v" || exit 1
+      shift "$n"
+      ;;
+    --note|--note=*)
+      if [ "$1" = --note ]; then v=${2:-}; n=2; else v=${1#--note=}; n=1; fi
+      [ "$LED_NOTE_GIVEN" = 0 ] || { echo "error: duplicate --note" >&2; exit 1; }
+      case "$v" in ''|--*) echo "error: --note requires the sender's own words" >&2; exit 1 ;; esac
+      LED_NOTE=$v
+      LED_NOTE_GIVEN=1
       shift "$n"
       ;;
     *) break ;;
@@ -640,6 +677,17 @@ if [ -n "$LED_MARK" ] && [ "${1:-}" = "--key" ]; then
   echo "error: a mark cannot accompany --key; a keystroke is lifecycle already" >&2
   exit 1
 fi
+FM_NEWLINE='
+'
+if [ "$LED_NOTE_GIVEN" = 1 ]; then
+  case "$LED_MARK" in
+    lifecycle:*) ;;
+    *)
+      echo "error: --note is the sender's own words riding beside a generated lifecycle line; it needs --lifecycle <relaunch|teardown|handover|escalation>" >&2
+      exit 1
+      ;;
+  esac
+fi
 case "$LED_MARK" in
   from-leader:*)
     if [ -z "$LED_TASK_ID" ]; then
@@ -680,12 +728,37 @@ case "$LED_MARK" in
       exit 1
     fi
     ;;
+  lifecycle:*)
+    LED_ACTION=${LED_MARK#lifecycle:}
+    if [ -n "$*" ]; then
+      echo "error: --lifecycle $LED_ACTION composes its own line from the action; it carries no typed text, so a work instruction can never wear a lifecycle mark. Pass your own words as --note \"<text>\" (at most $FM_SEND_LIFECYCLE_NOTE_MAX characters, one line) and they ride beside the generated line, labelled as yours; the work itself is the leader's to steer. Nothing was sent." >&2
+      exit 1
+    fi
+    LED_BODY=$(fm_send_lifecycle_body "$LED_ACTION") || {
+      echo "error: no lifecycle line is composed for '$LED_ACTION'" >&2
+      exit 1
+    }
+    if [ "$LED_NOTE_GIVEN" = 1 ]; then
+      case "$LED_NOTE" in
+        *"$FM_NEWLINE"*)
+          echo "error: --note is one line riding beside the generated lifecycle line; nothing was sent" >&2
+          exit 1
+          ;;
+      esac
+      if [ "${#LED_NOTE}" -gt "$FM_SEND_LIFECYCLE_NOTE_MAX" ]; then
+        echo "error: --note is ${#LED_NOTE} characters and the bound is $FM_SEND_LIFECYCLE_NOTE_MAX: a note carries context beside a lifecycle action, never the work, which is the leader's to steer. Nothing was sent." >&2
+        exit 1
+      fi
+      LED_BODY="$LED_BODY $FM_SEND_LIFECYCLE_NOTE_LABEL $LED_NOTE"
+    fi
+    set -- "$LED_BODY"
+    ;;
 esac
 if [ -z "$LED_MARK" ] && [ "${1:-}" != "--key" ] && [ -n "$LED_LEADER" ] && [ -f "$STATE/$LED_LEADER.meta" ] \
   && [ "$(fm_lead_endpoint_state "$STATE/$LED_LEADER.meta" "$LED_LEADER" 2>/dev/null)" = alive ]; then
   echo "error: $LED_TASK_ID is led by $LED_LEADER (alive): while a leader exists, First Mate reaches a working crewmate with lifecycle and the captain's words only; the work is the leader's to steer:
   FM_HOME=$FM_HOME bin/fm-lead.sh steer --leader $LED_LEADER $LED_TASK_ID \"<one line>\"
-First Mate's own sends carry a mark: --lifecycle <relaunch|teardown|handover|escalation> for a lifecycle action, --captain for the captain's words (appended verbatim to ${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md under \"## Captain's intent\" first), or --key for a keystroke; nothing was sent." >&2
+First Mate's own sends carry a mark: --lifecycle <relaunch|teardown|handover|escalation> for a lifecycle action (its line is composed from the action; your own words ride beside it, labelled, with --note \"<text>\"), --captain for the captain's words (appended verbatim to ${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md under \"## Captain's intent\" first), or --key for a keystroke; nothing was sent." >&2
   exit 1
 fi
 
