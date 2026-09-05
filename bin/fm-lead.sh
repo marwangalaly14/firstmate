@@ -9,7 +9,9 @@
 #   a full state read; bin/fm-crew-state.sh <id> owns the crewmate's current
 #   state. A leader with no crewmates prints one "no crewmates recorded" line
 #   to stderr and exits 0. A leader with no record in this home, a missing
-#   --leader, or an unknown verb is refused with exit 1.
+#   --leader, or an unknown verb is refused with exit 1. A leader is a task
+#   spawned with bin/fm-spawn.sh --leads (leads=1 in its record); crew lists
+#   what is recorded under any task id and leaves the leader test to the spawn.
 # FM_HOME must be explicit, exactly as for bin/fm-send.sh: a leader's view must
 # never silently resolve against another home. FM_STATE_OVERRIDE points the
 # state directory elsewhere for tests.

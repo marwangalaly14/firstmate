@@ -94,14 +94,17 @@ write_leader() {
   fm_write_meta "$home/state/$id.meta" \
     "window=firstmate:fm-$id" "endpoint_task_id=$id" "worktree=$proj.wt-$id" \
     "project=$proj" "harness=claude" "kind=ship" "mode=no-mistakes" "yolo=off" \
-    "tasktmp=/tmp/x" "model=default" "effort=default" "spawn_gen=s1.1.1"
+    "tasktmp=/tmp/x" "model=default" "effort=default" "spawn_gen=s1.1.1" "leads=1"
 }
 
 # write_crewmate <home> <proj> <id> <leader>: a crewmate already recorded under
-# <leader>, the shape this story's own spawn writes.
+# <leader>, the shape this story's own spawn writes (a story crewmate, so no
+# leads=1).
 write_crewmate() {
   local home=$1 proj=$2 id=$3 leader=$4
   write_leader "$home" "$proj" "$id"
+  grep -v '^leads=1$' "$home/state/$id.meta" > "$home/state/$id.meta.tmp"
+  mv "$home/state/$id.meta.tmp" "$home/state/$id.meta"
   printf 'leader=%s\n' "$leader" >> "$home/state/$id.meta"
 }
 

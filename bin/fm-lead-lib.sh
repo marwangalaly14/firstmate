@@ -14,10 +14,12 @@
 # dead pane keeps its record (and its slot) until the record is torn down,
 # because a crewmate with unlanded work is still the leader's to recover.
 #
-# A leader is any ship or scout task of this home whose record exists, whose
-# endpoint answers the same cheap presence read the session-start digest uses
-# for its "endpoint: alive" line, and which is not itself led (chains are one
-# level deep). A secondmate never leads this home's crewmates.
+# A leader is a ship or scout task of this home that was spawned as one
+# (bin/fm-spawn.sh --leads writes leads=1 into its record and leaves its trim
+# window where the harness puts it; bin/fm-compact-lib.sh), whose record
+# exists, whose endpoint answers the same cheap presence read the session-start
+# digest uses for its "endpoint: alive" line, and which is not itself led
+# (chains are one level deep). A secondmate never leads this home's crewmates.
 #
 # FM_LEAD_MAX_CREW (4) is the ceiling on recorded crewmates per leader; the
 # spawn takes the fifth only after one of the four is torn down. The spawn
@@ -34,6 +36,7 @@
 #     no-record   - no state/<leader-id>.meta in this home.
 #     secondmate  - the record is a secondmate's.
 #     led <id>    - the record is itself led by <id>.
+#     not-leader  - the record carries no leads=1: a story crewmate.
 # fm_lead_check_chain <state-dir> <leader-id> <new-id>
 #   Returns 0 when <new-id> may be recorded under <leader-id>; otherwise prints
 #   one refusal line to stderr and returns 1. The refusal names the leader, the
@@ -74,6 +77,7 @@ fm_lead_leader_state() {  # <state-dir> <leader-id>
   [ "$(fm_meta_get "$meta" kind)" != secondmate ] || { printf 'secondmate'; return 0; }
   led=$(fm_meta_get "$meta" leader)
   [ -z "$led" ] || { printf 'led %s' "$led"; return 0; }
+  [ "$(fm_meta_get "$meta" leads)" = 1 ] || { printf 'not-leader'; return 0; }
   case "$(fm_lead_endpoint_state "$meta" "$leader")" in
     alive) printf 'alive' ;;
     *) printf 'dead' ;;
@@ -100,6 +104,9 @@ fm_lead_check_chain() {  # <state-dir> <leader-id> <new-id>
       return 1 ;;
     led*)
       echo "error: leader $leader is itself led by ${leader_state#led }; a chain is one level deep, so a led crewmate cannot lead" >&2
+      return 1 ;;
+    not-leader)
+      echo "error: leader $leader was not spawned as a leader (--leads); only a task recorded with leads=1 may lead, so spawn the leader with --leads before spawning crewmates under it" >&2
       return 1 ;;
     *)
       echo "error: leader $leader's record reads '$leader_state'; refusing to chain under it" >&2
