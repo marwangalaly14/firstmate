@@ -64,8 +64,14 @@ test_ship_and_scout_briefs_carry_the_two_doors() {
     assert_contains "$section" "First Mate answers in your inbox." "$id: without a leader, First Mate answers"
     assert_not_contains "$section" "Your leader" "$id: no leader is named when none was given"
     [ "$(printf '%s\n' "$section" | grep -c -E 'key=')" -eq 2 ] || fail "$id: exactly two keyed doors, got:"$'\n'"$section"
+    # One shape for blocked in the whole brief: every instruction to write a
+    # blocked line (the door, rule 4, rule 5, rule 7, the isolation stop) is
+    # the keyed stuck door, so whoever answers closes each with one key.
+    [ "$(grep -c 'blocked: ' "$brief")" -ge 4 ] || fail "$id: the brief's blocked instructions, got:"$'\n'"$(grep -n 'blocked: ' "$brief")"
+    [ "$(grep -c 'blocked: ' "$brief")" -eq "$(grep -c 'blocked: \[key=stuck\] ' "$brief")" ] \
+      || fail "$id: blocked is spelled one way, the keyed stuck door, got:"$'\n'"$(grep -n 'blocked: ' "$brief" | grep -v 'key=stuck')"
   done
-  pass "every ship mode and the scout scaffold carry the two doors right after the story, keyed story-size and stuck, with this task's status file, answered by First Mate when no leader is named"
+  pass "every ship mode and the scout scaffold carry the two doors right after the story, keyed story-size and stuck, with this task's status file, answered by First Mate when no leader is named; blocked is spelled one way in the whole brief"
 }
 
 # --- 2. --leader names a recorded leader, refuses anything else --------------
@@ -80,7 +86,7 @@ test_leader_is_named_and_must_be_a_recorded_leader() {
   section=$(doors_section "$brief")
   assert_contains "$section" "Your leader, \`lead-a\`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain's words." "the leader is named as the one who answers"
   assert_not_contains "$section" "First Mate answers in your inbox." "with a leader, First Mate is not the one who answers"
-  assert_contains "$(cat "$brief")" "same obstacle twice, append \`blocked: {why}\` and stop; your leader will help." "rule 5 names the leader"
+  assert_contains "$(cat "$brief")" "same obstacle twice, append \`blocked: [key=stuck] {why}\` and stop; your leader will help." "rule 5 names the leader"
   assert_contains "$(cat "$brief")" "Your leader will reply with the decision." "rule 6 names the leader"
   assert_contains "$(cat "$brief")" "Your leader (\`lead-a\`) steers you through durable message files" "the inbox section names the leader as the one who steers"
   assert_contains "$(cat "$brief")" "First Mate reaches this inbox only with lifecycle actions and the captain's words." "the inbox section limits First Mate to lifecycle and the captain's words"
