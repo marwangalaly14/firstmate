@@ -100,14 +100,25 @@ section_lines() {  # <file> <name>
 
 # A commit id is not news: strike "(abc1234)", "(abc1234, def5678)" and a bare
 # hash word out of a line that names what changed for a person, with the
-# preposition that introduced it. A word is a commit id only when it is made
-# of [0-9a-f], is 7 to 40 characters long, AND mixes at least one digit with
-# at least one a-f letter - a plain long number ("epoch 1757100000", "1400000
-# tokens") and an all-letter word ("effaced") are words, not hashes. The
-# honest cost: an all-digit or all-letter hash is not struck, which is rare
-# and harmless, because this is a report and never a gate. The predicate needs
-# a look at the whole token, which portable ERE cannot express, so the strike
-# is an awk pass; the sed that follows only tidies the spacing it leaves.
+# introducer word that brought it in. A word is a commit id only when it is
+# made of [0-9a-f], is 7 to 40 characters long, AND mixes at least one digit
+# with at least one a-f letter - a plain long number ("epoch 1757100000",
+# "1400000 tokens") and an all-letter word ("effaced") are words, not hashes.
+# The honest cost: an all-digit or all-letter hash is not struck, which is
+# rare and harmless, because this is a report and never a gate.
+#
+# The rule, settled: an introducer word from the set
+# (after|in|at|as|landed|commit|from|to), an optional opening parenthesis, the
+# commit id and its matching closing parenthesis go as ONE unit, so "landed
+# (7ea43a4)." leaves "." and never a stray bracket; a comma or space stranded
+# in front of the introducer goes with it ("hands, in (99e8821)." -> "hands.").
+# A parenthesised id with no introducer loses the whole parenthetical, both
+# brackets included ("ships (7ea43a4) today" -> "ships today"). The awk pass
+# leaves the brackets it emptied in place and the sed that follows removes the
+# empty parenthetical, collapses doubled spaces and drops a space before
+# . , ; : ) - which is why the "(" must survive the introducer's removal.
+# The predicate needs a look at the whole token, which portable ERE cannot
+# express, so the strike is an awk pass.
 strike_commit_ids() {
   awk '
     function is_commit(t) {
@@ -127,14 +138,20 @@ strike_commit_ids() {
         # or after a space, "(" or ",", never inside a longer word.
         if (is_commit(tok) && (prev == "" || prev == " " || prev == "(" || prev == ",")) {
           kept = out pre
-          sub(/[^0-9A-Za-z]+$/, "", kept)
-          word = kept
+          # The separator the hash sat behind - " ", "(", " (" - is kept
+          # exactly as it was, so an opening bracket still meets its closing
+          # one; only the introducer word in front of it is taken away.
+          tail = kept
+          sub(/^.*[0-9A-Za-z]/, "", tail)
+          head = substr(kept, 1, length(kept) - length(tail))
+          word = head
           sub(/^.*[^0-9A-Za-z]/, "", word)
           if (word ~ /^(after|in|at|as|landed|commit|from|to)$/) {
-            sub(/ *[0-9A-Za-z]+$/, "", kept)
-            out = kept
+            sub(/[0-9A-Za-z]+$/, "", head)
+            sub(/[ ,]+$/, "", head)
+            out = head tail
           } else {
-            out = out pre
+            out = kept
           }
         } else {
           out = out pre tok

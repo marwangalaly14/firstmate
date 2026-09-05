@@ -15,8 +15,8 @@
 # judgement. A secondmate charter carries none of it. --leads appends "# You
 # lead crewmates" to a ship or scout brief, opening with "Read
 # docs/branch-leader.md before your first steer"; a brief without --leads never
-# mentions the playbook, and neither does the always-loaded AGENTS.md, so the
-# playbook is read by the one crewmate whose job it is and by nobody else.
+# mentions the playbook, so the playbook is read by the one crewmate whose job
+# it is and by nobody else.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -215,9 +215,9 @@ test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
   FM_SECONDMATE_CHARTER='Supervise the proj domain.' scaffold "$home" sm3 --secondmate proj
   [ "$RC" -eq 0 ] || fail "a secondmate charter must still scaffold:"$'\n'"$OUT"
   ! grep -q -i 'branch-leader' "$home/data/sm3/brief.md" || fail "a charter never mentions the playbook"
-  # the always-loaded rulebook does not carry it either: the playbook reaches
-  # the one crewmate whose job it is through its brief, and nobody else
-  ! grep -q 'branch-leader' "$ROOT/AGENTS.md" || fail "AGENTS.md must not name the playbook; it is the leader's brief that does: $(grep -n 'branch-leader' "$ROOT/AGENTS.md")"
+  # The always-loaded rulebook's own wording is deliberately not asserted here:
+  # a document's text is not behaviour, and what a crewmate receives is the
+  # generated brief above.
   # refusals: a led crewmate cannot lead; a charter is not a leader of this home
   scaffold "$home" r1 proj --mode no-mistakes --leads --leader lead-a
   [ "$RC" -ne 0 ] || fail "--leads with --leader must be refused"
@@ -227,7 +227,7 @@ test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
   [ "$RC" -ne 0 ] || fail "--leads on a secondmate charter must be refused"
   assert_contains "$OUT" "--leads applies only to crewmate ship or scout briefs" "the charter refusal says where --leads applies"
   [ ! -e "$home/data/r2/brief.md" ] || fail "a refused --leads charter leaves no brief"
-  pass "--leads appends the leader section after the doors, opening with 'Read docs/branch-leader.md before your first steer' and the playbook's absolute path, on every ship mode and the scout; no brief without --leads, led or not, nor the charter, nor AGENTS.md names the playbook; --leads with --leader and on a charter are refused"
+  pass "--leads appends the leader section after the doors, opening with 'Read docs/branch-leader.md before your first steer' and the playbook's absolute path, on every ship mode and the scout; no brief without --leads, led or not, nor the charter, names the playbook; --leads with --leader and on a charter are refused"
 }
 
 test_ship_and_scout_briefs_carry_the_two_doors

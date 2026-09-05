@@ -23,7 +23,11 @@
 # chain"). A door is never rung twice: data/<task-id>/doors/cursor holds the
 # count of status lines already read, advanced under data/<task-id>/doors/.lock
 # so the Stop hook and the watcher, which both run this relay, cannot both
-# ring the same line.
+# ring the same line. The ring loop reads exactly the lines the cursor will
+# record - the count taken before the read, and no further - because a ring
+# takes real time (the doorbell plus FM_SEND_SETTLE) and the crewmate may
+# append while it runs; a line past that count is left to the next run, which
+# is already how a half-written line is treated.
 #
 # Who runs it: the crewmate's Stop hook, after the busy-event writer (fm-spawn
 # wires it for a led claude crewmate only), and the watcher when it meets a
@@ -145,6 +149,7 @@ n=0
 # by wc -l and is read next time.
 while IFS= read -r line; do
   n=$((n + 1))
+  [ "$n" -le "$TOTAL" ] || break
   [ "$n" -gt "$CURSOR" ] || continue
   case "$line" in *[![:space:]]*) ;; *) continue ;; esac
   key=$(status_line_decision_key "$line") || continue

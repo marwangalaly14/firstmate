@@ -252,7 +252,48 @@ test_relay_rings_each_keyed_door_once() {
   pass "relay: every new keyed door is rung into the leader's inbox exactly once, with the closing steer, and recorded in the ledger behind the cursor"
 }
 
-# --- 2. the relay: what is not a leader's door ------------------------------
+# --- 2. the relay reads exactly the lines its cursor will record -----------
+# A ring takes real time (the doorbell plus FM_SEND_SETTLE) and the crewmate
+# is live throughout it. Here the fake tmux appends a SECOND keyed door line
+# the first time the doorbell is typed - the fork window, reproduced with no
+# sleeping - and the relay must ring it on the NEXT run, once, never twice.
+test_relay_rings_only_the_lines_it_counted() {
+  make_home fork
+  mv "$FAKEBIN/tmux" "$FAKEBIN/tmux-under"
+  cat > "$FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  send-keys)
+    if [ -n "${FM_FAKE_APPEND_ONCE_FILE:-}" ] && [ ! -f "${FM_FAKE_APPEND_ONCE_MARK:-/nonexistent}" ]; then
+      : > "$FM_FAKE_APPEND_ONCE_MARK"
+      printf '%s\n' "${FM_FAKE_APPEND_ONCE_LINE:-}" >> "$FM_FAKE_APPEND_ONCE_FILE"
+    fi ;;
+esac
+exec "$(dirname "$0")/tmux-under" "$@"
+SH
+  chmod +x "$FAKEBIN/tmux"
+  printf '%s\n' "$DOOR" > "$STATE/c1.status"
+  run_relay FM_FAKE_APPEND_ONCE_FILE="$STATE/c1.status" FM_FAKE_APPEND_ONCE_MARK="$HOME_DIR/appended.once" \
+    FM_FAKE_APPEND_ONCE_LINE="$BLOCK" -- c1
+  expect_code 0 "$RC" "the relay exits 0: $ERR"
+  [ -f "$HOME_DIR/appended.once" ] || fail "the fork window did not open: no line was appended while the relay was ringing"
+  [ "$(grep -c . "$STATE/c1.status")" -eq 2 ] || fail "the crewmate's status file holds both door lines, got:"$'\n'"$(cat "$STATE/c1.status")"
+  [ "$(door_rows c1 | tr '\n' ',')" = 'rung story-size,' ] || fail "the first run rings only the line it counted, got:"$'\n'"$(door_rows c1)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "one record reaches the leader, got $(inbox_count lead-a)"
+  [ "$(cat "$DATA/c1/doors/cursor")" = 1 ] || fail "the cursor claims exactly the line it read, got $(cat "$DATA/c1/doors/cursor")"
+  run_relay -- c1
+  expect_code 0 "$RC" "the second run exits 0: $ERR"
+  [ "$(door_rows c1 | tr '\n' ',')" = 'rung story-size,rung stuck,' ] || fail "the second run rings the appended door exactly once, got:"$'\n'"$(door_rows c1)"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "one record per door line, got $(inbox_count lead-a)"
+  [ "$(cat "$DATA/c1/doors/cursor")" = 2 ] || fail "the cursor now covers both lines, got $(cat "$DATA/c1/doors/cursor")"
+  run_relay -- c1
+  [ "$(door_rows c1 | wc -l | tr -d ' ')" -eq 2 ] || fail "a third run adds no row, got:"$'\n'"$(door_rows c1)"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "and no record"
+  pass "relay: a door line appended while the relay is ringing is left to the next run, so every door is rung exactly once and the cursor claims exactly the lines that were read"
+}
+
+# --- 3. the relay: what is not a leader's door ------------------------------
 test_relay_leaves_the_unled_alone() {
   make_home unled
   printf '%s\n' "$DOOR" > "$STATE/u1.status"
@@ -268,7 +309,7 @@ test_relay_leaves_the_unled_alone() {
   pass "relay: an unled crewmate, a task without a record and bad arguments ring nobody and write nothing"
 }
 
-# --- 3. the relay: a failure is recorded, never sent ------------------------
+# --- 4. the relay: a failure is recorded, never sent ------------------------
 test_relay_records_failures_without_sending() {
   make_home failures
   printf '%s\n' "$DOOR" > "$STATE/c2.status"
@@ -306,7 +347,7 @@ test_relay_records_failures_without_sending() {
   pass "relay: a dead, gone or unrecorded leader and a send that did not land are ledger rows without a ring; a live lock steps aside, a stale one is taken over"
 }
 
-# --- 4. the watcher: a held door is not First Mate's wake ------------------
+# --- 5. the watcher: a held door is not First Mate's wake ------------------
 test_watcher_absorbs_a_held_door_and_its_turn_end() {
   make_home held
   # The hook shape: the Stop hook rang the door before the watcher saw it.
@@ -341,7 +382,7 @@ test_watcher_absorbs_a_held_door_and_its_turn_end() {
   pass "watcher: a led crewmate's door its live leader holds is absorbed with its turn-end - no wake, a triage line, rung once whether by the hook or the watcher"
 }
 
-# --- 4b. the absorb marks the bytes it judged, never the ones that arrived ---
+# --- 5b. the absorb marks the bytes it judged, never the ones that arrived ---
 # The window: leader_holds_signal reads the span, then the relay fork, fm-send
 # and the settle run before leader_absorb_signals marks the file. A `done:`
 # line the crewmate appends in that window was never classified, so it must
@@ -385,7 +426,7 @@ SH
   pass "the chain absorb marks exactly the bytes leader_holds_signal judged: a done: line appended in the window between the span read and the mark stays unclassified and wakes First Mate at the next poll"
 }
 
-# --- 5. the watcher: without a leader to hold it, the door surfaces ---------
+# --- 6. the watcher: without a leader to hold it, the door surfaces ---------
 test_watcher_surfaces_when_no_leader_holds_the_door() {
   make_home dead-leader
   printf '%s\n' "$DOOR" > "$STATE/c1.status"
@@ -428,7 +469,7 @@ test_watcher_surfaces_when_no_leader_holds_the_door() {
   pass "watcher: a dead leader, an unled crewmate, another captain-relevant line in the span, or a ring that did not land surfaces the door to First Mate exactly as before"
 }
 
-# --- 6. the watcher: one escalation past the bound --------------------------
+# --- 7. the watcher: one escalation past the bound --------------------------
 test_watcher_escalates_a_held_door_once_past_the_bound() {
   make_home overdue
   printf '%s\n' "$DOOR" > "$STATE/c1.status"
@@ -452,7 +493,7 @@ test_watcher_escalates_a_held_door_once_past_the_bound() {
   pass "watcher: a door held open past FM_LEADER_ESCALATE_SECS wakes First Mate once, as a signal wake naming the door and the leader, and never twice"
 }
 
-# --- 7. the watcher: a leader that dies holding a door holds nothing --------
+# --- 8. the watcher: a leader that dies holding a door holds nothing --------
 test_watcher_wakes_at_once_when_a_holding_leader_dies() {
   make_home leader-died
   printf '%s\n' "$DOOR" > "$STATE/c1.status"
@@ -467,7 +508,7 @@ test_watcher_wakes_at_once_when_a_holding_leader_dies() {
   pass "watcher: a door rung to a leader that then died is First Mate's at the next poll, recorded escalated"
 }
 
-# --- 8. the watcher: a closed door is recorded answered ---------------------
+# --- 9. the watcher: a closed door is recorded answered ---------------------
 test_watcher_records_an_answered_door() {
   make_home answered
   printf '%s\n' "$DOOR" > "$STATE/c1.status"
@@ -485,6 +526,7 @@ test_watcher_records_an_answered_door() {
 }
 
 test_relay_rings_each_keyed_door_once
+test_relay_rings_only_the_lines_it_counted
 test_relay_leaves_the_unled_alone
 test_relay_records_failures_without_sending
 test_watcher_absorbs_a_held_door_and_its_turn_end

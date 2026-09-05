@@ -197,6 +197,40 @@ EOF
   pass "the DONE section strikes only a hex word that mixes digits and a-f letters: a plain long number and an epoch survive word for word, a real commit id goes with its preposition and leaves no double space or stray parenthesis"
 }
 
+# An introducer word, an optional "(", the hash and its matching ")" go as one
+# unit; a parenthesised hash with no introducer loses the whole parenthetical.
+# Neither leaves a stray bracket, a doubled space or a space before a stop.
+test_a_parenthesised_hash_goes_with_its_introducer_as_one_unit() {
+  local done_lines expected
+  make_home parens
+  write_task "$HOME_DIR" lead-p "leads=1"
+  cat > "$DATA/lead-p/logbook.md" <<'EOF'
+# Logbook: lead-p
+
+## Done
+- The keep-set landed (7ea43a4).
+- The leader's hands, in (99e8821).
+- The keep-set landed 7ea43a4.
+- The card ships (7ea43a4) today.
+- Cut the crewmate's fresh head from 1560000 to 1400000 tokens.
+- The order at epoch 1757100000 was typed into the pane.
+EOF
+  run_progress scaffold lead-p --estimate 20
+  [ "$RC" -eq 0 ] || fail "scaffold exits 0, got $RC: $ERR"
+  done_lines=$(printf '%s\n' "$OUT" | sed -n 's/^- \[x\] //p')
+  expected="The keep-set.
+The leader's hands.
+The keep-set.
+The card ships today.
+Cut the crewmate's fresh head from 1560000 to 1400000 tokens.
+The order at epoch 1757100000 was typed into the pane."
+  [ "$done_lines" = "$expected" ] || fail "each DONE line reads as a whole sentence; wanted:"$'\n'"$expected"$'\n'"got:"$'\n'"$done_lines"
+  printf '%s\n' "$done_lines" | grep -q '[()]' && fail "no DONE line keeps a stray bracket:"$'\n'"$done_lines"
+  printf '%s\n' "$done_lines" | grep -q '  ' && fail "no DONE line keeps a doubled space:"$'\n'"$done_lines"
+  printf '%s\n' "$done_lines" | grep -q ' [.,;:)]' && fail "no DONE line keeps a space before punctuation:"$'\n'"$done_lines"
+  pass "an introducer word, its optional bracket, the commit id and the matching bracket go as one unit; a bare parenthesised id loses the whole parenthetical; an all-digit run is not a commit id and survives word for word"
+}
+
 test_fleet_rolls_the_leaders_bars_into_one() {
   local first fence
   make_home fleet
@@ -232,4 +266,5 @@ test_bar_renders_twenty_cells
 test_scaffold_carries_the_six_parts
 test_scaffold_without_inputs_says_what_is_missing
 test_only_a_mixed_hex_word_is_struck_from_done
+test_a_parenthesised_hash_goes_with_its_introducer_as_one_unit
 test_fleet_rolls_the_leaders_bars_into_one
