@@ -281,6 +281,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/branch-leader.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/calm-mode-feasibility.md",
       "audience": "maintainer-verification"
     },

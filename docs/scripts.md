@@ -32,7 +32,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
-| `fm-brief.sh`            | Scaffold ship (explicit `--mode`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout |
+| `fm-brief.sh`            | Scaffold ship (explicit `--mode`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout; ship and scout briefs carry the crewmate's two doors upward (`--leader` names who answers) and the crewmate contract paragraph |
 | `fm-dod-lib.sh`          | One owner of the ship definition of done and of the no-mistakes `--intent` contract |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
@@ -109,6 +109,15 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-wake-lib.sh`         | Shared durable wake queue, recovery generations, portable locks, and watcher identity/health helpers |
 | `fm-classify-lib.sh`     | Shared wake classification, durable keyed-decision folds and scans, unread status selection, and bounded latest-event snapshots |
 | `fm-send.sh`             | Steer a task via a durable inbox record plus doorbell, or send a supported key or typed harness invocation through the recorded backend |
+| `fm-session-event.sh`    | Append a claude task's real session id, transcript path, model, and effort to `data/<id>/sessions.log` from its SessionStart hook |
+| `fm-lead.sh`             | The branch leader's view of its own crewmates: `crew` lists the tasks recorded under a leader with `fm-lead-lib.sh`'s liveness read (fm-backend's recovery-grade agent read, then the digest's cheap presence read where that cannot classify); the leader's own moments are in [branch-leader.md](branch-leader.md) |
+| `fm-lead-lib.sh`         | One owner of the branch-leader chain (`leader=` in task meta), who may lead, and the four-crewmate ceiling the spawn enforces |
+| `fm-compact-lib.sh`      | One owner of the 140K line (the mark, the harness's two terms, the derived `autoCompactWindow`) and of the keep-set every trim's summary must keep |
+| `fm-compact-keep.sh`     | Print the keep-set to the harness's summarizer from a claude PreCompact hook, before every automatic or typed trim |
+| `fm-logbook-lib.sh`      | One owner of a crewmate's logbook, `data/<id>/logbook.md`: its path, its four-heading template, and the create-once init the spawn runs for crewmates and leaders |
+| `fm-crew-vitals.sh`      | One four-line card per crewmate (head, peak and mark, trims, turns; the last tool call and any repeat; tokens since the last commit and the logbook; the logbook's next line), read from the transcript, the record, the worktree and the logbook, never from the crewmate |
+| `fm-trim-event.sh`       | Record every trim of a crewmate's context from a claude PostCompact hook (`data/<id>/trims/`) and, from the second automatic trim on, put one line into the leader's steering inbox or one signal wake before First Mate |
+| `fm-task-card.sh`        | Print a crewmate's task card into its context from a claude SessionStart hook when a trimmed session resumes (source `compact` only): the brief's intent and definition of done, the logbook, the instructions waiting, and the last status line, read from disk, cut at fixed sizes, and never a word about the machinery |
 | `fm-branch-prompt.sh`    | Emit the Pi supervision branch's byte-stable system prompt ([pi-supervision-branch.md](pi-supervision-branch.md)) |
 | `fm-branch-outcome.sh`   | Own the supervision branch's append-only outcome store, cursors, bounded status-coverage indexes, and session-start replay |
 | `fm-lease.sh`            | Claim, release, inspect, and sweep per-task supervision leases                       |

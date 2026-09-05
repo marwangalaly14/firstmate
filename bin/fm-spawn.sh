@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--leader <task-id>|--leads]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--leader <task-id>|--leads]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -45,6 +45,20 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --leader <task-id> records the branch leader that briefs, steers and
+#   supervises this crewmate: leader=<task-id> in state/<id>.meta, echoed on the
+#   success line. bin/fm-lead-lib.sh owns who may lead (a live ship or scout
+#   task of this home that is not itself led) and the four-crewmate ceiling;
+#   the spawn refuses before any endpoint, worktree, or record exists when the
+#   leader fails that test or already leads four recorded crewmates, naming
+#   them, and holds state/.lead-<leader>.lock from that count until the record
+#   is published. Ship and scout spawns only; a relaunch keeps the recorded
+#   leader, and bin/fm-lead.sh crew lists a leader's crewmates.
+#   --leads spawns a branch leader: leads=1 in its record, the only record a
+#   later --leader may name, and no trim line (below), because the epic's whole
+#   shape lives in the leader's head. Ship and scout spawns only; refused with
+#   --leader (a chain is one level deep) and with --relaunch (the record's role
+#   stands). Echoed as leads=1 on the success line.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -217,12 +231,37 @@
 # items), on a config/backlog-backend=manual home, and in a home that keeps no
 # data/backlog.md. An automatic-backend home with a backlog but no compatible
 # tasks-axi refuses before creating any lifecycle state.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path> [leader=<task-id>] [leads=1]
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
 # Every fresh spawn or relaunch records a new spawn_gen= incarnation token so durable
 # consumers can distinguish a replacement worker that reuses the same task id.
+# Every record also carries launch=<the launch line as given>: the harness template
+# with its placeholders, or the raw launch line, with every NAME=value word whose
+# name looks like a credential (KEY, TOKEN, SECRET, PASSWORD, PASSWD, AUTH,
+# CREDENTIAL) redacted, because the record is printed into every session-start
+# digest. A claude task's worktree hooks also carry a SessionStart entry (matcher
+# startup|resume|clear|fork, never compact) that appends the harness's real
+# session id, transcript path, model, and effort to data/<id>/sessions.log
+# through bin/fm-session-event.sh, whose header owns the record format, and a
+# second SessionStart entry (matcher compact) running bin/fm-task-card.sh,
+# whose stdout the harness puts into the crewmate's context when a trimmed
+# session resumes: the brief's intent and definition of done, the logbook,
+# the instructions waiting, and the last status line, read from disk.
+# The same hooks carry a PreCompact entry (matcher auto|manual) running
+# bin/fm-compact-keep.sh, whose stdout the harness appends to its summarizer's
+# instructions before every trim: the keep-set bin/fm-compact-lib.sh owns.
+# A claude ship or scout crewmate that is not a leader is a story crewmate: its
+# worktree .claude/settings.local.json also carries the one settings key that
+# moves the harness's automatic trim to the captain's 140K line, derived in
+# bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; the sum
+# is never spelled here), and its record says so with trim_mark=140000 and
+# trim_window=<that sum>. Both are owned keys rewritten by every launch, so a
+# relaunch onto a harness without the key drops the claim; a harness without the
+# key, a leader, and a secondmate get neither line nor claim. Nothing stops,
+# warns, or throttles the crewmate: the harness trims every session somewhere,
+# and this only moves that point.
 # When the home session's frozen trace-context decision is enabled (see
 # docs/configuration.md and bin/fm-trace-context-lib.sh), the meta also records
 # one W3C traceparent= carrier, the same value injected into the pane as
@@ -307,6 +346,12 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-lead-lib.sh
+. "$SCRIPT_DIR/fm-lead-lib.sh"
+# shellcheck source=bin/fm-compact-lib.sh
+. "$SCRIPT_DIR/fm-compact-lib.sh"
+# shellcheck source=bin/fm-logbook-lib.sh
+. "$SCRIPT_DIR/fm-logbook-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -338,6 +383,7 @@ BACKEND_ARG=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
+LEADER_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -345,6 +391,9 @@ BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
+LEADER_SET=0
+LEADS=0
+LEADS_SET=0
 RELAUNCH=0
 POS=()
 want_value=
@@ -361,6 +410,7 @@ for a in "$@"; do
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
+      leader) LEADER_ARG=$a; LEADER_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -384,6 +434,9 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
+    --leader) want_value=leader ;;
+    --leader=*) LEADER_ARG=${a#--leader=}; LEADER_SET=1 ;;
+    --leads) LEADS=1; LEADS_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -395,6 +448,7 @@ done
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
+[ "$LEADER_SET" -eq 0 ] || [ -n "$LEADER_ARG" ] || { echo "error: --leader requires a non-empty value" >&2; exit 1; }
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -412,6 +466,22 @@ case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
+# The leader chain (bin/fm-lead-lib.sh) is a fresh ship or scout spawn's axis:
+# a relaunch keeps whatever leader= its record carries, and a secondmate leads
+# its own home's crewmates rather than being led here.
+if [ "$LEADER_SET" -eq 1 ]; then
+  [ "$RELAUNCH" -eq 0 ] || { echo "error: --relaunch keeps the task's recorded leader; --leader cannot override it" >&2; exit 1; }
+  [ "$KIND" != secondmate ] || { echo "error: --leader applies only to ship and scout spawns; a secondmate leads its own home's crewmates" >&2; exit 1; }
+fi
+# --leads marks a branch leader at its own spawn: it keeps the harness's own
+# trim window (bin/fm-compact-lib.sh) and is recorded as leads=1, which is what
+# a later --leader spawn checks. A led crewmate cannot lead, a relaunch keeps
+# the recorded role, and a secondmate is not a leader of this home's crewmates.
+if [ "$LEADS_SET" -eq 1 ]; then
+  [ "$LEADER_SET" -eq 0 ] || { echo "error: --leads cannot be combined with --leader; a chain is one level deep, so a led crewmate cannot lead" >&2; exit 1; }
+  [ "$RELAUNCH" -eq 0 ] || { echo "error: --relaunch keeps the task's recorded role; --leads cannot add or remove it" >&2; exit 1; }
+  [ "$KIND" != secondmate ] || { echo "error: --leads applies only to ship and scout spawns; a secondmate leads its own home's crewmates" >&2; exit 1; }
+fi
 
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
 # so every axis this block resolves for a fresh spawn instead comes from that
@@ -751,6 +821,12 @@ SPAWN_CONTROL_PARENT=0
 SPAWN_META_TMP=
 SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
+SPAWN_LEAD_LOCK=
+SPAWN_LEAD_LOCK_HELD=0
+SPAWN_LEADER_SUFFIX=
+SPAWN_LEADS_SUFFIX=
+SPAWN_TRIM_MARK=
+SPAWN_TRIM_WINDOW=
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
 SPAWN_TASK_SET_LOCK=
@@ -863,6 +939,10 @@ spawn_abort_cleanup() {
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
+            echo "launch=$(launch_record_line "${LAUNCH:-}")"
+            [ -z "${SPAWN_LEADER:-}" ] || echo "leader=$SPAWN_LEADER"
+            [ -z "${SPAWN_TRIM_MARK:-}" ] || { echo "trim_mark=$SPAWN_TRIM_MARK"; echo "trim_window=$SPAWN_TRIM_WINDOW"; }
+            [ "${LEADS:-0}" -ne 1 ] || echo "leads=1"
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
@@ -885,6 +965,10 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  if [ "$SPAWN_LEAD_LOCK_HELD" = 1 ]; then
+    SPAWN_LEAD_LOCK_HELD=0
+    fm_lock_release "$SPAWN_LEAD_LOCK" || true
   fi
   if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_SET_LOCK_HELD=0
@@ -1125,6 +1209,7 @@ RAW_LAUNCH=0
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+SPAWN_LEADER=$LEADER_ARG
 if [ "$RELAUNCH" -eq 1 ]; then
   [ "${#POS[@]}" -eq 1 ] || {
     echo "error: --relaunch takes the task id only; its project or home comes from the task's own record" >&2
@@ -1149,6 +1234,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fm_backend_validate_task_endpoint "$RELAUNCH_META" "$ID" || exit 1
   BACKEND=$FM_BACKEND_VALIDATED_BACKEND
   RELAUNCH_TARGET=$FM_BACKEND_VALIDATED_TARGET
+  # The role and the leader come from the record: a leader relaunches as a
+  # leader (no trim line), a story crewmate relaunches with the line and under
+  # the leader it was spawned under, whatever the record predates.
+  LEADS=0
+  [ "$(fm_meta_get "$RELAUNCH_META" leads)" != 1 ] || LEADS=1
+  SPAWN_LEADER=$(fm_meta_get "$RELAUNCH_META" leader)
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
   # A relaunch must PROVE the previous agent is gone before it launches another
@@ -1667,6 +1758,28 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+# launch_record_line <launch-line>: the launch line as given, made safe to
+# record. Whitespace collapses to single spaces so the value stays one meta
+# line, and every NAME=value word whose NAME contains KEY, TOKEN, SECRET,
+# PASSWORD, PASSWD, AUTH, or CREDENTIAL (any case) has its value replaced by
+# <redacted>, up to the next whitespace. The meta is printed into every
+# session-start digest, so a credential in a raw launch line must never reach
+# it (the same leak the captain accepted once and no more).
+launch_record_line() {
+  printf '%s\n' "$1" | tr '\n\r\t' '   ' | awk '{
+    out = ""
+    for (i = 1; i <= NF; i++) {
+      w = $i
+      if (match(w, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+        name = substr(w, 1, RLENGTH - 1)
+        if (toupper(name) ~ /KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL/) w = name "=<redacted>"
+      }
+      out = (i == 1) ? w : out " " w
+    }
+    print out
+  }'
+}
+
 resolved_existing_dir() {
   local path=$1
   [ -d "$path" ] || { echo "error: firstmate home does not exist or is not a directory: $path" >&2; return 1; }
@@ -1859,6 +1972,9 @@ else
 fi
 [ -f "$BRIEF" ] || { echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2; exit 1; }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  # The crewmate's logbook, from bin/fm-logbook-lib.sh's template when absent; a
+  # relaunch keeps what the crewmate wrote. Leaders get the same file.
+  fm_logbook_init "$DATA" "$ID" || exit 1
   if fm_brief_task_placeholders_present "$BRIEF"; then
     echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
     exit 1
@@ -1925,6 +2041,34 @@ if [ "$KIND" = ship ]; then
      && [ "$(delivery_rigor_rank "$MODE")" -lt "$(delivery_rigor_rank "$STANDING_MODE")" ]; then
     echo "notice: $ID ships mode=$MODE while the standing posture for $PROJ_NAME is $STANDING_MODE - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
   fi
+fi
+
+# Brief/spawn leader agreement, the same way. fm-brief.sh --leader names the
+# leader in the brief's doors section ("Your leader, `<id>`, answers in your
+# inbox"); without --leader the brief says First Mate answers. A spawn that
+# disagrees would launch a crewmate whose brief names one answerer while its
+# record names another. A brief that says neither (hand-written, or scaffolded
+# before the doors existed) is launched as given. A relaunch's leader is the
+# record's (SPAWN_LEADER), since --leader is refused there.
+# shellcheck disable=SC2016  # the backticks are the brief's own Markdown, not a command substitution
+BRIEF_LEADER=$(sed -n 's/^Your leader, `\([^`]*\)`, answers in your inbox.*$/\1/p' "$BRIEF" | head -n 1)
+if [ -n "$BRIEF_LEADER" ] && [ "$BRIEF_LEADER" != "$SPAWN_LEADER" ]; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but the task record names ${SPAWN_LEADER:+leader }${SPAWN_LEADER:-no leader}; re-scaffold the brief to match the record" >&2
+  elif [ -n "$LEADER_ARG" ]; then
+    echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but this spawn passed --leader $LEADER_ARG; correct the flag or re-scaffold the brief" >&2
+  else
+    echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but this spawn passed no --leader; pass --leader $BRIEF_LEADER or re-scaffold the brief without one" >&2
+  fi
+  exit 1
+fi
+if [ -n "$SPAWN_LEADER" ] && grep -q -x 'First Mate answers in your inbox.' "$BRIEF"; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but the task record names leader $SPAWN_LEADER; re-scaffold the brief with --leader $SPAWN_LEADER" >&2
+  else
+    echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but this spawn passed --leader $LEADER_ARG; re-scaffold the brief with --leader $LEADER_ARG" >&2
+  fi
+  exit 1
 fi
 
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
@@ -2168,6 +2312,19 @@ else
     echo "error: task $ID cannot be dispatched because its backlog data directory is inaccessible: $DATA ($FM_BACKLOG_TRANSITION_ERROR)" >&2
     exit 1
   fi
+fi
+
+# Leader chain preflight (bin/fm-lead-lib.sh). The leader must be a live task of
+# this home leading fewer than FM_LEAD_MAX_CREW recorded crewmates, proved here
+# before any endpoint, worktree, or record exists. The per-leader lock is held
+# from this count until the record below is published, so two spawns under one
+# leader cannot both count three and both take the fourth slot.
+if [ -n "$LEADER_ARG" ]; then
+  SPAWN_LEAD_LOCK=$(fm_lead_lock_path "$STATE" "$LEADER_ARG")
+  fm_lock_acquire_wait "$SPAWN_LEAD_LOCK"
+  SPAWN_LEAD_LOCK_HELD=1
+  fm_lead_check_chain "$STATE" "$LEADER_ARG" "$ID" || exit 1
+  SPAWN_LEADER_SUFFIX=" leader=$LEADER_ARG"
 fi
 
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
@@ -2635,6 +2792,10 @@ mkdir -p "$TASK_TMP/gotmp"
 # check or leak into a commit.
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
+# The session-record hook (bin/fm-session-event.sh) runs from the pane with no
+# environment, so it gets the physical data path; a home whose data directory
+# cannot be resolved keeps the logical path rather than failing the launch.
+DATA_REAL=$(cd "$DATA" 2>/dev/null && pwd -P) || DATA_REAL=$DATA
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
@@ -2722,8 +2883,50 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
+      # Session record (bin/fm-session-event.sh): every source that begins a
+      # transcript appends the real session id, transcript path, model, and
+      # effort to data/<id>/sessions.log; compact keeps the same transcript and
+      # is deliberately not matched. The command prints nothing, because a
+      # SessionStart hook's stdout enters the crewmate's context.
+      j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-session-event.sh") $(shell_quote "$DATA_REAL") $(shell_quote "$ID") 2>/dev/null || true")
+      # The 140K line (bin/fm-compact-lib.sh owns the number and the key): a
+      # story crewmate's harness trims its own head at the captain's line
+      # instead of the model default; a leader (leads=1) keeps the harness's
+      # own window. The line is written here and recorded below as
+      # trim_mark=/trim_window=, and only here, so a harness without the key
+      # never claims one.
+      j_trim=
+      if [ "$LEADS" -ne 1 ]; then
+        SPAWN_TRIM_MARK=$FM_COMPACT_MARK
+        SPAWN_TRIM_WINDOW=$(fm_compact_window) || exit 1
+        j_trim=",\"$FM_COMPACT_SETTINGS_KEY\":$SPAWN_TRIM_WINDOW"
+      fi
+      # The keep-set (bin/fm-compact-keep.sh): before every trim, automatic or
+      # typed, the harness appends the hook's stdout to its summarizer's
+      # instructions, so each summary keeps the acceptance criteria, the
+      # failing test, the last decision, the files changed, and the pending
+      # instructions. Leaders included; the crewmate's own context never
+      # carries the text.
+      j_precompact=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-compact-keep.sh") 2>/dev/null || true")
+      # The trim record (bin/fm-trim-event.sh): after every trim, automatic or
+      # typed, the hook writes data/<id>/trims/<n>.md with the head before the
+      # trim and the summary, and from the second automatic trim on puts one
+      # line into the leader's steering inbox (leader= below) or, without a
+      # live leader, one signal wake for First Mate. Leaders included; the
+      # command prints nothing, because the harness shows a PostCompact
+      # hook's stdout in the crewmate's terminal.
+      j_postcompact=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-trim-event.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
+      # The task card (bin/fm-task-card.sh): when a trimmed session resumes
+      # (SessionStart with source=compact, the one source the session record
+      # above does not match), the harness puts the hook's stdout into the
+      # crewmate's context, so the crewmate reads its brief's intent and
+      # definition of done, its logbook, the count of instructions waiting,
+      # and its last status line verbatim from disk instead of from the
+      # summary. Leaders included; the card's own words name none of the
+      # machinery.
+      j_taskcard=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-task-card.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]},{"matcher":"compact","hooks":[{"type":"command","command":"$j_taskcard"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
@@ -3038,7 +3241,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort launch trim_mark trim_window busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3056,6 +3259,19 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # launch= is the launch line as given (harness template with its placeholders,
+  # or the raw line), credentials redacted (launch_record_line); the per-session
+  # truth the harness reports lands in data/<id>/sessions.log.
+  echo "launch=$(launch_record_line "$LAUNCH")"
+  # leader= is written only for a --leader spawn; a relaunch keeps the recorded
+  # line through preserve_relaunch_meta because leader is not an owned key.
+  [ -z "$LEADER_ARG" ] || echo "leader=$LEADER_ARG"
+  # trim_mark=/trim_window= are the line this launch wrote into the worktree
+  # settings (bin/fm-compact-lib.sh); owned keys, so a relaunch onto a harness
+  # without the key drops the claim. leads=1 marks a branch leader and, like
+  # leader=, survives a relaunch through preserve_relaunch_meta.
+  [ -z "$SPAWN_TRIM_MARK" ] || { echo "trim_mark=$SPAWN_TRIM_MARK"; echo "trim_window=$SPAWN_TRIM_WINDOW"; }
+  [ "$LEADS_SET" -ne 1 ] || echo "leads=1"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -3102,6 +3318,11 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   fi
   SPAWN_META_TMP=
+fi
+# The leader= line is published; the next spawn under this leader may count.
+if [ "$SPAWN_LEAD_LOCK_HELD" = 1 ]; then
+  SPAWN_LEAD_LOCK_HELD=0
+  fm_lock_release "$SPAWN_LEAD_LOCK" || true
 fi
 
 # Fuse the backlog In-flight transition into the publication that just created
@@ -3343,4 +3564,5 @@ fi
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
-echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+[ "$LEADS" -ne 1 ] || SPAWN_LEADS_SUFFIX=" leads=1"
+echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT$SPAWN_LEADER_SUFFIX$SPAWN_LEADS_SUFFIX"
