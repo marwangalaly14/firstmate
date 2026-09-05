@@ -24,12 +24,13 @@
 #                                   transcript, head before the trim, the count
 #                                   of automatic trims so far, who was told, and
 #                                   the summary the harness wrote, verbatim.
-#     data/<task-id>/trims/index    one line per trim, appended last:
+#     data/<task-id>/trims/index    one line per trim:
 #                                   <n> <trigger> <epoch> <head|?> <told> [ordered:<leader>]
 #                                   (tab-separated; told is leader:<id>,
-#                                   firstmate, continue:<leader>, or -; the
-#                                   sixth field marks a manual trim the leader
-#                                   ordered).
+#                                   firstmate, or -; the sixth field marks a
+#                                   manual trim the leader ordered), and, after
+#                                   a carry-on nudge that did not record,
+#                                   `steer-failed <epoch> <leader>`.
 #   The index also carries the leader's orders, written by bin/fm-lead.sh
 #   trim before it types /compact: `ordered <epoch> <leader> <focus|->`, and
 #   `order-failed <epoch>` when the /compact provably did not reach the pane.
@@ -47,10 +48,14 @@
 #   leader that ordered it - `trim done - continue: <focus>`, or `trim done -
 #   continue with your task card` when the order carried no focus. That is an
 #   append at a trim, so the law of the head holds. The pending order is
-#   one-shot: this trim's own ledger line clears it, so a later /compact the
-#   crewmate types itself is recorded and never nudged. A send that does not
-#   record fails nothing: the hook still exits 0 and prints nothing, and the
-#   told field says so, exactly as a failed tell does.
+#   one-shot, and it is spent BEFORE the nudge is attempted: this trim's own
+#   ledger line is appended first, so a later /compact the crewmate types
+#   itself can never be nudged by it, however the send or this process ends. A
+#   send that does not record fails nothing: the hook still exits 0 and prints
+#   nothing, the trim record's told line names the failure, and a
+#   `steer-failed <epoch> <leader>` line goes into the ledger beside it, the
+#   same visible shape a failed order already takes. `steer-failed` is not a
+#   trim and never clears or counts as one.
 #   <n> counts every trim of the task, manual ones included. The automatic
 #   count N is 1 + max(automatic lines already in the index, earlier automatic
 #   compact_boundary rows in the transcript), so a ledger that missed a trim
@@ -300,6 +305,14 @@ if [ "$TRIGGER" = auto ] && [ "$N_AUTO" -ge 2 ]; then
   fi
 fi
 
+write_record "$TOLD_LINE" || true
+ORDERED=
+[ "$TRIGGER" = manual ] && [ -n "$ORDER_LEADER" ] && ORDERED="ordered:$ORDER_LEADER"
+printf '%s\t%s\t%s\t%s\t%s%s\n' "$N" "$TRIGGER" "$EPOCH" "$HEAD" "$TOLD" "${ORDERED:+$(printf '\t%s' "$ORDERED")}" >> "$INDEX" 2>/dev/null || true
+
+# The order is spent the moment the line above exists, so the nudge is sent
+# only after it: whatever happens to this process now, no later trim can be
+# nudged by this order.
 if [ "$TRIGGER" = manual ] && [ -n "$ORDER_LEADER" ]; then
   case "$ORDER_FOCUS" in
     ''|-) CONTINUE='trim done - continue with your task card' ;;
@@ -307,15 +320,11 @@ if [ "$TRIGGER" = manual ] && [ -n "$ORDER_LEADER" ]; then
   esac
   # shellcheck disable=SC2031  # FM_HOME is this script's own argument, never a subshell's
   if FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$ID" --from-leader "$ORDER_LEADER" "$CONTINUE" >/dev/null 2>&1; then
-    TOLD="continue:$ORDER_LEADER"
     TOLD_LINE="$ID itself (carry-on steer from leader $ORDER_LEADER)"
   else
     TOLD_LINE="nobody (the carry-on steer from leader $ORDER_LEADER did not reach $ID)"
+    printf 'steer-failed\t%s\t%s\n' "$(date +%s)" "$ORDER_LEADER" >> "$INDEX" 2>/dev/null || true
   fi
+  write_record "$TOLD_LINE" || true
 fi
-
-write_record "$TOLD_LINE" || true
-ORDERED=
-[ "$TRIGGER" = manual ] && [ -n "$ORDER_LEADER" ] && ORDERED="ordered:$ORDER_LEADER"
-printf '%s\t%s\t%s\t%s\t%s%s\n' "$N" "$TRIGGER" "$EPOCH" "$HEAD" "$TOLD" "${ORDERED:+$(printf '\t%s' "$ORDERED")}" >> "$INDEX" 2>/dev/null || true
 exit 0

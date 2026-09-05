@@ -207,6 +207,40 @@ test_planted_repeats_are_named() {
   pass "a planted loop, five reads of one file, an A-B-A-B alternation are named; four chunked reads and a loop older than 30 calls are not"
 }
 
+# --- a helper's rows are the helper's, never the crewmate's ------------------
+# The measured shape: a crewmate at 120,150 tokens dispatches a Task and waits
+# while its helper reads one file five times. Read naively, the card would
+# show the helper's small head, call the crewmate idle, and report the
+# helper's reads as the crewmate circling.
+test_a_sub_agents_rows_are_never_the_crewmates() {
+  local home t j i
+  home=$(make_home sidechain)
+  write_task "$home" h1 ship
+  t="$home/h1.jsonl"
+  {
+    row_assistant $((NOW - 3000)) m0 500 0 0 50
+    row_assistant $((NOW - 2000)) m1 150 0 120000 0 "$(tool_task 'read the spec')"
+    for i in 1 2 3 4 5; do row_sidechain $((NOW - 900 + i)) "s$i" 1000 0 2500 15 "$(tool_read /w/spec.md)"; done
+    row_sidechain $((NOW - 800)) s6 1000 0 2500 15
+  } > "$t"
+  point_transcript "$home" h1 "$t"
+  j=$(run_vitals "$home" h1 --json) || fail "h1 must succeed"
+  [ "$(printf '%s' "$j" | jq -r '.head')" = 120150 ] \
+    || fail "the head is the crewmate's own last request, not its helper's: got $(printf '%s' "$j" | jq -r '.head')"
+  [ "$(printf '%s' "$j" | jq -r '.busy')" = true ] \
+    || fail "a crewmate waiting on a helper is busy, got $(printf '%s' "$j" | jq -r '.busy')"
+  [ "$(printf '%s' "$j" | jq -r '.repeats.kind')" = none ] \
+    || fail "the helper's five reads are not the crewmate circling, got $(printf '%s' "$j" | jq -c '.repeats')"
+  [ "$(printf '%s' "$j" | jq -r '.turns')" = 2 ] \
+    || fail "only the crewmate's own requests are turns, got $(printf '%s' "$j" | jq -r '.turns')"
+  [ "$(printf '%s' "$j" | jq -r '.last_call.name')" = Task ] \
+    || fail "the last call is the crewmate's own dispatch, got $(printf '%s' "$j" | jq -c '.last_call')"
+  # The quiet clock runs from the helper's newest row, not the dispatch.
+  [ "$(printf '%s' "$j" | jq -r '.quiet_for')" = 800 ] \
+    || fail "the quiet clock is held open while the helper is still writing, got $(printf '%s' "$j" | jq -r '.quiet_for')"
+  pass "a sub-agent's rows never enter the crewmate's card: the head stays the crewmate's own 120,150, the helper's five reads are not reported as circling, only the crewmate's own requests are turns, and the crewmate reads as busy with its quiet counted from its helper's newest row"
+}
+
 # --- the trim summary is a boundary, not an unanswered prompt ----------------
 
 test_a_trim_summary_row_is_not_an_unanswered_prompt() {
@@ -324,6 +358,7 @@ test_known_transcript_yields_the_exact_card
 test_no_boundary_missing_transcript_and_leader_mark
 test_head_rounds_to_the_nearest_hundred_across_a_thousand
 test_planted_repeats_are_named
+test_a_sub_agents_rows_are_never_the_crewmates
 test_a_trim_summary_row_is_not_an_unanswered_prompt
 test_outside_drops_the_logbook_line
 test_growth_changes_only_what_changed_and_partial_lines_are_skipped

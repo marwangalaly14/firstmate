@@ -290,7 +290,9 @@ test_manual_trim_after_an_order_is_attributed() {
   assert_contains "$(sed '/^--$/,$d' "$home/state/c1.inbox/001.msg")" "mark=from-leader:lead-a" "the nudge carries the ordering leader's mark (the led channel)"
   assert_contains "$(cat "$home/send.log")" "Firstmate instruction waiting" "the inbox doorbell rings the crewmate"
   assert_contains "$(cat "$home/data/c1/trims/2.md")" "- told: c1 itself (carry-on steer from leader lead-a)" "the record names the nudge"
-  [ "$(sed -n '3p' "$idx" | cut -f1,2,5,6)" = $'2\tmanual\tcontinue:lead-a\tordered:lead-a' ] || fail "the ledger names the nudge and still ends in ordered:<leader>:"$'\n'"$(cat "$idx")"
+  [ "$(sed -n '3p' "$idx" | cut -f1,2,5,6)" = $'2\tmanual\t-\tordered:lead-a' ] || fail "the ledger line ends in ordered:<leader>:"$'\n'"$(cat "$idx")"
+  # The line that spends the order is written BEFORE the nudge is attempted.
+  [ "$(cut -f1 "$idx" | tr '\n' ' ')" = '1 ordered 2 ' ] || fail "the ledger holds the trim line and no failure row:"$'\n'"$(cat "$idx")"
   # A manual trim with no pending order (the order was consumed) is nobody's,
   # and is nudged by nobody: the order is one-shot.
   run_hook "$home" c1 "$(payload manual "$t" "Typed by hand.")"
@@ -312,6 +314,50 @@ test_manual_trim_after_an_order_is_attributed() {
   assert_contains "$(cat "$home/data/c1/trims/5.md")" "- automatic trims so far: 2" "order lines are never counted as trims"
   [ -f "$home/state/lead-a.inbox/001.msg" ] || fail "the second automatic trim still rings the leader"
   pass "a manual trim after fm-lead's order is the leader's (record and ledger say so, not counted, rings the leader not at all) and carries the crewmate its carry-on nudge even though the ordering command is long gone; a hand-typed or failed-order trim is nobody's and is nudged by nobody; order lines never count"
+}
+
+# --- 3c. the order is spent before the nudge, whatever the send does ---------
+# The one-shot guarantee cannot depend on the send: fm-send is the slow step
+# and a PostCompact hook can be killed inside it. Here the send is made to
+# fail outright, which is the same visible state as a hook killed mid-send.
+test_a_failed_nudge_still_spends_the_order() {
+  local home t idx msgs f
+  make_home nudgefail; home=$HOME_DIR
+  # An unwritable inbox is how a send is made to fail here; root ignores the
+  # mode bits, so the case cannot be posed for root.
+  [ "$(id -u)" -ne 0 ] || { pass "skipped as root: an unwritable inbox cannot fail a send"; return 0; }
+  write_task "$home" lead-a "leads=1"
+  write_task "$home" c1 "leader=lead-a"
+  t="$home/c1.jsonl"
+  write_transcript "$t"
+  idx="$home/data/c1/trims/index"
+  mkdir -p "$home/data/c1/trims"
+  printf 'ordered\t%s\tlead-a\tthe failing test\n' "$(date +%s)" > "$idx"
+  # The record IS the delivery, so an inbox it cannot be written into is a
+  # send that failed outright - the same visible state as a hook killed inside
+  # fm-send, which is the slow step.
+  mkdir -p "$home/state/c1.inbox"
+  chmod 500 "$home/state/c1.inbox"
+  run_hook "$home" c1 "$(payload manual "$t" "Focused on the failing test.")"
+  chmod 700 "$home/state/c1.inbox"
+  assert_quiet "$home" "a nudge that did not record"
+  [ "$(cut -f1 "$idx" | tr '\n' ' ')" = 'ordered 1 steer-failed ' ] \
+    || fail "the trim line spends the order first, then the failure is recorded beside it:"$'\n'"$(cat "$idx")"
+  [ "$(sed -n '3p' "$idx" | cut -f3)" = lead-a ] || fail "the steer-failed line names the leader:"$'\n'"$(cat "$idx")"
+  assert_contains "$(cat "$home/data/c1/trims/1.md")" "- told: nobody (the carry-on steer from leader lead-a did not reach c1)" \
+    "the trim record names the failure too"
+  msgs=0
+  for f in "$home"/state/c1.inbox/*.msg; do [ -f "$f" ] && msgs=$((msgs + 1)); done
+  [ "$msgs" -eq 0 ] || fail "no record landed, got $msgs"
+  # The point: the spent order can never nudge a later trim the crewmate typed.
+  run_hook "$home" c1 "$(payload manual "$t" "Typed by hand.")"
+  assert_quiet "$home" "a self-typed trim after a failed nudge"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- ordered by: nobody in the ledger" \
+    "a trim the crewmate typed itself is nobody's, even after a nudge that failed"
+  msgs=0
+  for f in "$home"/state/c1.inbox/*.msg; do [ -f "$f" ] && msgs=$((msgs + 1)); done
+  [ "$msgs" -eq 0 ] || fail "and it is nudged by nobody, got $msgs records"
+  pass "the ledger line that spends a leader's order is written before the nudge is attempted: a nudge that never records leaves a steer-failed row, the record says so, the hook still exits 0 and prints nothing, and the next trim the crewmate types itself is nobody's and gets no steer"
 }
 
 # --- 4. no live leader: First Mate gets one signal wake -----------------------
@@ -500,6 +546,7 @@ test_records_every_trim
 test_second_automatic_trim_rings_the_leader
 test_manual_trim_records_and_rings_nobody
 test_manual_trim_after_an_order_is_attributed
+test_a_failed_nudge_still_spends_the_order
 test_without_a_live_leader_first_mate_is_signalled
 test_unreadable_payloads_write_nothing
 test_earlier_automatic_trims_count_through_the_transcript

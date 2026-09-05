@@ -38,7 +38,16 @@
 #     row carrying isCompactSummary or isMeta, which follows a trim rather than
 #     asking the model for anything), and the seconds since that row.
 #     bin/fm-crew-signals.sh reads them for its stall signal; the card does not
-#     print them.
+#     print them. A crewmate waiting on a live helper is busy: the quiet clock
+#     runs from the LATER of the crewmate's own last conversation row and the
+#     newest sub-agent row, so a long Task does not read as a stall.
+#   A sub-agent's rows are the sub-agent's and never the crewmate's: every row
+#   carrying isSidechain is skipped by the reader that builds head, start,
+#   peak, turns, trims, spend, the last call and repeats, so a helper's reads
+#   are never reported as the crewmate circling and a helper's small head is
+#   never printed as the crewmate's. The `rows` count is a count of physical
+#   transcript rows and still counts them all. The only thing a sub-agent's
+#   row moves is the quiet clock above.
 #   the status word: the state of the last line of state/<id>.status, an
 #     EVENT, not current state; bin/fm-crew-state.sh owns the current state.
 #   mark: trim_mark= in state/<id>.meta; a leader has none by design.
@@ -186,9 +195,13 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
     def epoch_or_null($s): if $s == "" then null else ($s | tonumber) end;
     reduce (inputs | fromjson? // empty) as $r (
       {head: null, first_head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
-       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null, last_conv: null};
+       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null, last_conv: null,
+       helper_ts: null};
       .rows += 1
-      | if $r.type == "assistant" and ($r.message.usage? // null) != null then
+      | if ($r.isSidechain // false) == true then
+          (($r | ts)) as $st
+          | (if $st != null and (.helper_ts == null or $st > .helper_ts) then .helper_ts = $st else . end)
+        elif $r.type == "assistant" and ($r.message.usage? // null) != null then
           ($r.message.usage) as $u
           | (total($u)) as $t
           | .head = $t
@@ -283,7 +296,9 @@ vitals_json() {  # <id> -> one JSON object on stdout
       last_call: (if $t == null then null else $t.last_call end),
       last_call_age: (if $t == null or $t.last_call == null or $t.last_call.ts == null then null else ($now - $t.last_call.ts) end),
       busy: (if $t == null or $t.last_conv == null then null else ($t.last_conv.kind == "call" or $t.last_conv.kind == "input") end),
-      quiet_for: (if $t == null or $t.last_conv == null or $t.last_conv.ts == null then null else ($now - $t.last_conv.ts) end),
+      quiet_for: (if $t == null or $t.last_conv == null or $t.last_conv.ts == null then null
+                  else ($now - (if ($t.helper_ts // null) != null and $t.helper_ts > $t.last_conv.ts
+                                then $t.helper_ts else $t.last_conv.ts end)) end),
       repeats: (if $t == null then null else $t.repeats end),
       spend: (if $t == null then null else $t.spend end),
       spend_per_turn: (if $t == null or $t.turns == 0 then null else (($t.spend / $t.turns) | floor) end),

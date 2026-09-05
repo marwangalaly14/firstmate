@@ -200,63 +200,82 @@ EOF
 # THE RULE for a struck commit id, asserted as an invariant over the whole
 # matrix rather than as a list of examples: the id, the brackets it emptied,
 # the separator that introduced it (a space, or a comma and a space) and the
-# introducer word it followed all go as ONE unit, and what is left is a
-# grammatical sentence - no doubled space, no space before a stop, no ",.",
-# no ",,", no empty "()", and no bracket without its partner.
+# introducer word it followed all go as ONE unit, wherever in the sentence
+# they stood and whatever their capitalisation. What is left must read as a
+# sentence: no doubled space, no space before a stop, no ",." or ",,", no
+# leading comma or space, no empty or unpaired bracket, and a capital first
+# letter.
 test_a_struck_commit_id_leaves_a_grammatical_sentence() {
-  local intro sep open close want got done_lines n bad
+  local intro word sep open close position n want got done_lines bad expected
   make_home strikerule
   write_task "$HOME_DIR" lead-r "leads=1"
-  {
-    printf '# Logbook: lead-r\n\n## Done\n'
-    for intro in after in at as landed commit from to; do
+  # Every introducer, times capitalisation, times where in the sentence the
+  # citation stands, times the separator, times the bracketing. Each case's
+  # expected reading is the same sentence with the citation gone.
+  CASES=()
+  EXPECTED=()
+  for intro in after in at as landed commit from to; do
+    for word in "$intro" "$(printf '%s' "$intro" | tr '[:lower:]' '[:upper:]' | cut -c1)$(printf '%s' "$intro" | cut -c2-)"; do
       for sep in ' ' ', '; do
         for open in '' '('; do
           if [ -n "$open" ]; then close=')'; else close=; fi
-          printf -- '- The leader %s%s%s7ea43a4%s and the crew read it.\n' "$intro" "$sep" "$open" "$close"
+          for position in opens mid ends; do
+            case "$position" in
+              opens)
+                CASES+=("$(printf '%s%s%s7ea43a4%s, the crew read it and moved on.' "$word" "$sep" "$open" "$close")")
+                EXPECTED+=("The crew read it and moved on.") ;;
+              mid)
+                CASES+=("$(printf 'The crew %s%s%s7ea43a4%s read it and moved on.' "$word" "$sep" "$open" "$close")")
+                EXPECTED+=("The crew read it and moved on.") ;;
+              ends)
+                CASES+=("$(printf 'The crew read it and moved on %s%s%s7ea43a4%s.' "$word" "$sep" "$open" "$close")")
+                EXPECTED+=("The crew read it and moved on.") ;;
+            esac
+          done
         done
       done
     done
-    printf -- '- The keep-set landed, 7ea43a4.\n'
-    printf -- '- It landed, 7ea43a4.\n'
-    printf -- '- The keep-set landed (7ea43a4).\n'
-    printf -- '- The keep-set landed 7ea43a4.\n'
-    printf -- "- The leader's hands, in (99e8821).\n"
-    printf -- '- The card ships (7ea43a4) today.\n'
-    printf -- "- Cut the crewmate's fresh head from 1560000 to 1400000 tokens.\n"
-    printf -- '- The order at epoch 1757100000 was typed into the pane.\n'
+  done
+  # The named shapes, and the round-2 protections that must survive word for word.
+  CASES+=("The keep-set landed, 7ea43a4.");            EXPECTED+=("The keep-set.")
+  CASES+=("It landed, 7ea43a4.");                      EXPECTED+=("It.")
+  CASES+=("The keep-set landed (7ea43a4).");           EXPECTED+=("The keep-set.")
+  CASES+=("The keep-set landed 7ea43a4.");             EXPECTED+=("The keep-set.")
+  CASES+=("The leader's hands, in (99e8821).");        EXPECTED+=("The leader's hands.")
+  CASES+=("The card ships (7ea43a4) today.");          EXPECTED+=("The card ships today.")
+  CASES+=("In 7ea43a4, the keep-set landed.");         EXPECTED+=("The keep-set landed.")
+  CASES+=("After 7ea43a4, the crew read it.");         EXPECTED+=("The crew read it.")
+  CASES+=("Landed 7ea43a4, and the crew read it.");    EXPECTED+=("And the crew read it.")
+  CASES+=("after 7ea43a4, the tests pass.");           EXPECTED+=("The tests pass.")
+  CASES+=("Cut the crewmate's fresh head from 1560000 to 1400000 tokens.")
+  EXPECTED+=("Cut the crewmate's fresh head from 1560000 to 1400000 tokens.")
+  CASES+=("The order at epoch 1757100000 was typed into the pane.")
+  EXPECTED+=("The order at epoch 1757100000 was typed into the pane.")
+
+  {
+    printf '# Logbook: lead-r\n\n## Done\n'
+    for n in $(seq 0 $(( ${#CASES[@]} - 1 ))); do printf -- '- %s\n' "${CASES[$n]}"; done
   } > "$DATA/lead-r/logbook.md"
   run_progress scaffold lead-r --estimate 20
   [ "$RC" -eq 0 ] || fail "scaffold exits 0, got $RC: $ERR"
   done_lines=$(printf '%s\n' "$OUT" | sed -n 's/^- \[x\] //p')
-  # Every generated case reads as the same sentence with the citation gone.
-  n=0
-  for intro in after in at as landed commit from to; do
-    for sep in ' ' ', '; do
-      for open in '' '('; do
-        n=$((n + 1))
-        want="The leader and the crew read it."
-        got=$(printf '%s\n' "$done_lines" | sed -n "${n}p")
-        [ "$got" = "$want" ] || fail "an id struck after '$intro' with separator '$sep' and bracketing '${open:-none}' must read '$want', got '$got'"
-      done
-    done
+  [ "$(printf '%s\n' "$done_lines" | grep -c .)" -eq "${#CASES[@]}" ] \
+    || fail "every logbook line reaches DONE: wanted ${#CASES[@]}, got $(printf '%s\n' "$done_lines" | grep -c .)"
+  for n in $(seq 0 $(( ${#CASES[@]} - 1 ))); do
+    want=${EXPECTED[$n]}
+    got=$(printf '%s\n' "$done_lines" | sed -n "$((n + 1))p")
+    [ "$got" = "$want" ] || fail "'${CASES[$n]}' must read '$want', got '$got'"
   done
-  assert_contains "$done_lines" "The keep-set." "'The keep-set landed, 7ea43a4.' and its bracketed and bare kin all read 'The keep-set.'"
-  [ "$(printf '%s\n' "$done_lines" | grep -c '^The keep-set\.$')" -eq 3 ] \
-    || fail "all three keep-set shapes (comma, bracket, bare) read 'The keep-set.', got:"$'\n'"$done_lines"
-  assert_contains "$done_lines" "It." "'It landed, 7ea43a4.' reads 'It.'"
-  assert_contains "$done_lines" "The leader's hands." "an introducer behind a comma goes with the citation"
-  assert_contains "$done_lines" "The card ships today." "a bracketed id with no introducer loses the whole parenthetical"
-  assert_contains "$done_lines" "Cut the crewmate's fresh head from 1560000 to 1400000 tokens." "an all-digit run is not a commit id"
-  assert_contains "$done_lines" "The order at epoch 1757100000 was typed into the pane." "nor is an epoch"
   assert_not_contains "$done_lines" "7ea43a4" "no commit id survives"
   assert_not_contains "$done_lines" "99e8821" "nor a bracketed one"
   # The invariant, over every DONE line the report printed.
-  bad=$(printf '%s\n' "$done_lines" | grep -n -e '  ' -e ' [.,;:)]' -e ',\.' -e ',,' -e '()' || true)
-  [ -z "$bad" ] || fail "a struck line must read as a sentence - no doubled space, no space before a stop, no ',.' or ',,', no empty '()' - got:"$'\n'"$bad"
+  bad=$(printf '%s\n' "$done_lines" | grep -n -e '  ' -e ' [.,;:)]' -e ',\.' -e ',,' -e '^[ ,]' -e '()' || true)
+  [ -z "$bad" ] || fail "a struck line must read as a sentence - no doubled space, no space before a stop, no ',.' or ',,', no leading comma or space, no empty '()' - got:"$'\n'"$bad"
   bad=$(printf '%s\n' "$done_lines" | awk '{ o = gsub(/\(/, "("); c = gsub(/\)/, ")"); if (o != c) print NR ": " $0 }')
   [ -z "$bad" ] || fail "no bracket is left without its partner, got:"$'\n'"$bad"
-  pass "a struck commit id takes its brackets, its separator and its introducer with it across every introducer, separator and bracketing, leaving a grammatical sentence; an all-digit run is not a commit id and survives word for word"
+  bad=$(printf '%s\n' "$done_lines" | grep -n '^[^A-Z]' || true)
+  [ -z "$bad" ] || fail "every struck line still opens with a capital letter, got:"$'\n'"$bad"
+  pass "a struck commit id takes its brackets, its separator and its introducer with it across every introducer, capitalisation, position, separator and bracketing (${#CASES[@]} shapes), leaving a sentence that opens with a capital and carries no stray punctuation; an all-digit run is not a commit id and survives word for word"
 }
 
 test_fleet_rolls_the_leaders_bars_into_one() {

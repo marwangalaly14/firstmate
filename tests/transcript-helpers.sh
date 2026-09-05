@@ -24,6 +24,7 @@ row_assistant() {  # <epoch> <msg-id> <in> <cc> <cr> <out> [<tool-use json>...]
     "$id-$RANDOM" "$ts" "$id" "$content" "$in" "$cc" "$cr" "$out"
 }
 tool_bash() { printf '{"type":"tool_use","id":"t%s","name":"Bash","input":{"command":"%s","description":"%s"}}' "$RANDOM" "$1" "${2:-run it}"; }
+tool_task() { printf '{"type":"tool_use","id":"t%s","name":"Task","input":{"prompt":"%s"}}' "$RANDOM" "$1"; }
 tool_read() { printf '{"type":"tool_use","id":"t%s","name":"Read","input":{"file_path":"%s"%s}}' "$RANDOM" "$1" "${2:+,\"offset\":$2}"; }
 row_boundary() {  # <epoch> <trigger> <pre> <post>
   printf '{"type":"system","subtype":"compact_boundary","uuid":"b-%s","timestamp":"%s","compactMetadata":{"trigger":"%s","preTokens":%s,"postTokens":%s}}\n' "$RANDOM" "$(iso "$1")" "$2" "$3" "$4"
@@ -35,6 +36,12 @@ row_user() { printf '{"type":"user","uuid":"x-%s","timestamp":"%s","message":{"r
 row_summary() { printf '{"type":"user","uuid":"s-%s","timestamp":"%s","isCompactSummary":true,"message":{"role":"user","content":"summary"}}\n' "$RANDOM" "$(iso "$1")"; }
 row_meta() { printf '{"type":"user","uuid":"m-%s","timestamp":"%s","isMeta":true,"message":{"role":"user","content":"meta"}}\n' "$RANDOM" "$(iso "$1")"; }
 row_noise() { printf '{"type":"file-history-snapshot","messageId":"m"}\n'; }
+# A sub-agent's row: the same assistant shape the harness writes for a helper
+# a Task dispatched, marked isSidechain. Its turns, its head and its tool
+# calls are the helper's, never the crewmate's.
+row_sidechain() {  # <epoch> <msg-id> <in> <cc> <cr> <out> [<tool-use json>...]
+  row_assistant "$@" | jq -c '. + {isSidechain: true}'
+}
 
 make_worktree() {  # <path> <commit-epoch>
   local wt=$1 when=$2

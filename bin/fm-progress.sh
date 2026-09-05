@@ -111,22 +111,22 @@ section_lines() {  # <file> <name>
 #   - any brackets that wrapped it and are left empty;
 #   - the separator that directly introduced it (a space, or a comma and a
 #     space);
-#   - and the introducer word - after, in, at, as, landed, commit, from, to -
-#     when the id followed it through nothing but those separators and
-#     brackets.
-# What remains must be a grammatical sentence: no doubled space, no space
-# before . , ; : or ), no ",." and no ",,", no empty "()", and no bracket left
-# without its partner. tests/fm-progress.test.sh asserts that as an invariant
-# over every introducer, separator and bracketing, not as a list of examples.
+#   - and the introducer word - after, in, at, as, landed, commit, from, to,
+#     in any capitalisation - when the id followed it through nothing but
+#     those separators and brackets.
+# What remains must be a grammatical sentence, wherever the citation stood:
+# no doubled space, no space before . , ; : or ), no ",." and no ",,", no
+# leading comma or space, no empty "()", no bracket without its partner, and a
+# capital first letter when the strike took away the words the line opened
+# with. tests/fm-progress.test.sh asserts that as an invariant over every
+# introducer, capitalisation, position, separator and bracketing, not as a
+# list of examples.
 #
-# How it is done: the awk pass drops the id, the separator and the introducer,
-# and leaves the brackets it emptied where they stood so they still meet their
-# partners; the sed that follows removes the empty parenthetical, collapses
-# doubled spaces and drops a space before a stop. A separator made of anything
-# but spaces, commas and brackets is not a separator this rule knows, so the
-# id alone goes and the text around it is left untouched. The commit-id
-# predicate needs a look at the whole token, which portable ERE cannot
-# express, which is why the strike is an awk pass at all.
+# It is one awk pass, not a strike plus a tidy-up: the cleanup has to know
+# whether the line's opening was struck away in order to restore the capital,
+# so the two cannot be separate programs. The commit-id predicate needs a look
+# at the whole token, which portable ERE cannot express, which is why the
+# strike is awk at all.
 strike_commit_ids() {
   awk '
     function is_commit(t) {
@@ -134,7 +134,7 @@ strike_commit_ids() {
         && (t ~ /[0-9]/) && (t ~ /[a-f]/)
     }
     {
-      rest = $0; out = ""
+      rest = $0; out = ""; reopened = 0
       while (match(rest, /[0-9A-Za-z]+/)) {
         pre = substr(rest, 1, RSTART - 1)
         tok = substr(rest, RSTART, RLENGTH)
@@ -154,10 +154,13 @@ strike_commit_ids() {
             gsub(/[^()]/, "", brackets)
             word = head
             sub(/^.*[^0-9A-Za-z]/, "", word)
-            if (word ~ /^(after|in|at|as|landed|commit|from|to)$/) {
+            if (tolower(word) ~ /^(after|in|at|as|landed|commit|from|to)$/) {
               sub(/[0-9A-Za-z]+$/, "", head)
               sub(/[ ,]+$/, "", head)
             }
+            # Everything the line opened with is gone: what follows becomes
+            # the sentence, and has to read like one.
+            if (head == "") reopened = 1
             out = head (head == "" ? "" : " ") brackets
           } else {
             out = kept
@@ -166,15 +169,20 @@ strike_commit_ids() {
           out = out pre tok
         }
       }
-      print out rest
-    }' \
-  | sed -E \
-    -e 's/\( *(, *)*\)//g' \
-    -e 's/\( *, */(/g' \
-    -e 's/ +([.,;:)])/\1/g' \
-    -e 's/  +/ /g' \
-    -e 's/^ +//' \
-    -e 's/ +$//'
+      line = out rest
+      gsub(/[(] *(, *)*[)]/, "", line)
+      gsub(/[(] *, */, "(", line)
+      gsub(/ +[.]/, ".", line)
+      gsub(/ +,/, ",", line)
+      gsub(/ +;/, ";", line)
+      gsub(/ +:/, ":", line)
+      gsub(/ +[)]/, ")", line)
+      gsub(/  +/, " ", line)
+      sub(/^[ ,]+/, "", line)
+      sub(/ +$/, "", line)
+      if (reopened) line = toupper(substr(line, 1, 1)) substr(line, 2)
+      print line
+    }'
 }
 
 k_of() {  # <tokens> -> 91K | 3.1K | 512 | ?

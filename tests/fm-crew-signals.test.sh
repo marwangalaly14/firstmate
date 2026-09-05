@@ -315,6 +315,32 @@ test_a_trim_summary_is_not_a_stall() {
   pass "a transcript ending in the harness's own trim summary rings no stall once FM_STUCK_CALL_SECS has passed: the crewmate is idle at its prompt, not wedged"
 }
 
+# --- 6b. a crewmate waiting on a live helper is not stalled ------------------
+test_a_live_helper_holds_the_stall_but_never_disables_it() {
+  local t
+  make_home helper
+  # c1 dispatched a Task 1,000 s ago - past the bound - and its helper is
+  # still writing, the newest row 100 s old.
+  t=$(transcript c1)
+  {
+    row_assistant $((NOW - 1000)) m1 150 0 120000 0 "$(tool_task 'read the spec')"
+    row_sidechain $((NOW - 300)) s1 1000 0 2500 15 "$(tool_read /w/spec.md)"
+    row_sidechain $((NOW - 100)) s2 1000 0 2500 15 "$(tool_read /w/spec.md)"
+  } >> "$t"
+  run_signals FM_STUCK_CALL_SECS=900 -- c1
+  [ "$RC" -eq 0 ] || fail "the detector exits 0, got $RC: $ERR"
+  [ -z "$OUT" ] || fail "a crewmate whose helper is still writing is not stalled, got: '$OUT'"
+  [ "$(inbox_count lead-a)" -eq 0 ] || fail "and the leader is not rung"
+  # c2 dispatched the same call and nothing has been written since: the alarm
+  # must still ring, or the fix would have silenced it rather than made it true.
+  t=$(transcript c2)
+  row_assistant $((NOW - 1000)) m1 150 0 120000 0 "$(tool_task 'read the spec')" >> "$t"
+  run_signals FM_STUCK_CALL_SECS=900 -- c2
+  assert_contains "$OUT" "stall	rung	busy with nothing new for 17m" "with no helper row since the dispatch the stall still rings"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the stall rings the leader once"
+  pass "a crewmate waiting on a helper that is still writing rings no stall past the bound; with nothing written since its own dispatch the stall rings exactly as before - the alarm is made true, never disabled"
+}
+
 # --- 7c. the ring carries no word the crewmate wrote -------------------------
 test_the_ring_carries_no_logbook_words() {
   local logbook body card
@@ -391,6 +417,7 @@ test_drift_candidate_rings_without_a_logbook_change
 test_unled_crewmate_never_rings
 test_transcript_beats_the_report
 test_a_trim_summary_is_not_a_stall
+test_a_live_helper_holds_the_stall_but_never_disables_it
 test_the_ring_carries_no_logbook_words
 test_watcher_rings_from_its_poll_and_stays_quiet
 test_dead_leader_is_recorded_once
