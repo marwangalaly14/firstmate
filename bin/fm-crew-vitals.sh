@@ -4,7 +4,7 @@
 #        FM_HOME=<home> fm-crew-vitals.sh --leader <task-id> [--line|--json]
 #        FM_HOME=<home> fm-crew-vitals.sh --all [--line|--json]
 #   The card is four lines, designed for a leader with four crewmates, not forty:
-#     <id>  <last status event>  head 91K (peak 138K, mark 140K)  trims 1 auto  turns 212
+#     <id>  <last status event>  head 91K (start 60K, peak 138K, mark 140K)  trims 1 auto  turns 212
 #       last call  Bash `bash tests/fm-spawn.test.sh`  40s ago    repeats none
 #       tokens     46K since last commit (82m)   logbook 22m   spend 3.1K/turn
 #       next       "prove the excluded file never lands on the branch"   (logbook)
@@ -14,11 +14,13 @@
 #   ship and scout task recorded in this home. A field that cannot be read
 #   prints ? and never a number.
 # What each field reads, and nothing else:
-#   head, peak, turns, trims, last call, repeats, spend: the live transcript,
+#   head, start, peak, turns, trims, last call, repeats, spend: the live transcript,
 #     the newest line of data/<id>/sessions.log (bin/fm-session-event.sh writes
 #     it from the claude SessionStart hook). Every assistant row's usage gives
 #     the head (input + cache creation + cache read + output, the harness's own
-#     count); a turn is one model request (assistant rows sharing one message
+#     count); start is the head at the first request, what the crewmate
+#     carried before any work (the brief, the memory files, the launch);
+#     a turn is one model request (assistant rows sharing one message
 #     id are one turn); a trim is a compact_boundary row, and the head at a
 #     trim is the last assistant usage before that row, never the row's
 #     preTokens (bin/fm-compact-lib.sh says why); spend is the new tokens the
@@ -169,13 +171,14 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
     def short(t): salient(t) | .[0:60];
     def epoch_or_null($s): if $s == "" then null else ($s | tonumber) end;
     reduce (inputs | fromjson? // empty) as $r (
-      {head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
+      {head: null, first_head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
        last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null};
       .rows += 1
       | if $r.type == "assistant" and ($r.message.usage? // null) != null then
           ($r.message.usage) as $u
           | (total($u)) as $t
           | .head = $t
+          | .first_head = (if .first_head == null then $t else .first_head end)
           | .peak = (if $t > .peak then $t else .peak end)
           | .last_ts = (($r | ts) // .last_ts)
           | (($r.message.id // $r.uuid // null)) as $mid
@@ -255,6 +258,7 @@ vitals_json() {  # <id> -> one JSON object on stdout
       status: $status,
       transcript: (if $transcript == "" then null else $transcript end),
       head: ($t.head // null),
+      start: ($t.first_head // null),
       peak: (if $t == null then null else $t.peak end),
       mark: (num($mark)),
       turns: (if $t == null then null else $t.turns end),
@@ -278,11 +282,12 @@ vitals_json() {  # <id> -> one JSON object on stdout
 }
 
 print_card() {  # <json> <card|line>
-  local j=$1 fmt=$2 id status head peak mark turns trims_n trims_auto trims_manual trims_word
+  local j=$1 fmt=$2 id status head start peak mark turns trims_n trims_auto trims_manual trims_word
   local call_name call_short call_age rep_kind rep_n rep_what rep_word spend_c commit_age logbook logbook_age rate next
   id=$(printf '%s' "$j" | jq -r '.id')
   status=$(printf '%s' "$j" | jq -r '.status')
   head=$(k_of "$(printf '%s' "$j" | jq -r '.head // empty')")
+  start=$(k_of "$(printf '%s' "$j" | jq -r '.start // empty')")
   peak=$(k_of "$(printf '%s' "$j" | jq -r '.peak // empty')")
   mark=$(printf '%s' "$j" | jq -r '.mark // empty')
   if [ -n "$mark" ]; then mark=$(k_of "$mark"); else mark=none; fi
@@ -299,7 +304,7 @@ print_card() {  # <json> <card|line>
     elif [ "$trims_auto" -eq 0 ]; then trims_word="$trims_n manual"
     else trims_word="$trims_n ($trims_auto auto, $trims_manual manual)"; fi
   fi
-  printf '%s  %s  head %s (peak %s, mark %s)  trims %s  turns %s\n' "$id" "$status" "$head" "$peak" "$mark" "$trims_word" "$turns"
+  printf '%s  %s  head %s (start %s, peak %s, mark %s)  trims %s  turns %s\n' "$id" "$status" "$head" "$start" "$peak" "$mark" "$trims_word" "$turns"
   [ "$fmt" = line ] && return 0
   call_name=$(printf '%s' "$j" | jq -r '.last_call.name // empty')
   if [ -n "$call_name" ]; then

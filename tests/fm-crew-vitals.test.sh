@@ -116,16 +116,17 @@ test_known_transcript_yields_the_exact_card() {
   set_mtime "$(fm_logbook_path "$home/data" c1)" $((NOW - 1320))   # 22 minutes ago
   out=$(run_vitals "$home" c1) || fail "vitals must succeed:"$'\n'"$out"
   # shellcheck disable=SC2016 # The backticks are the card's own text, not a command.
-  expected='c1  working  head 91K (peak 138K, mark 140K)  trims 1 auto  turns 5
+  expected='c1  working  head 91K (start 60K, peak 138K, mark 140K)  trims 1 auto  turns 5
   last call  Bash `bash tests/fm-spawn.test.sh`  40s ago    repeats none
   tokens     47K since last commit (82m)   logbook 22m   spend 43K/turn
   next       "prove the excluded file never lands on the branch"   (logbook)'
   [ "$out" = "$expected" ] || fail "the card must match exactly; got:"$'\n'"$out"$'\n'"expected:"$'\n'"$expected"
   out=$(run_vitals "$home" c1 --line) || fail "--line must succeed"
-  [ "$out" = 'c1  working  head 91K (peak 138K, mark 140K)  trims 1 auto  turns 5' ] || fail "--line is the first line, got: $out"
+  [ "$out" = 'c1  working  head 91K (start 60K, peak 138K, mark 140K)  trims 1 auto  turns 5' ] || fail "--line is the first line, got: $out"
   j=$(run_vitals "$home" c1 --json) || fail "--json must succeed"
   [ "$(printf '%s' "$j" | jq -r '.head')" = 91000 ] || fail "json head, got $(printf '%s' "$j" | jq -r '.head')"
   [ "$(printf '%s' "$j" | jq -r '.peak')" = 138000 ] || fail "json peak"
+  [ "$(printf '%s' "$j" | jq -r '.start')" = 60000 ] || fail "json start is the head at the first request, got $(printf '%s' "$j" | jq -r '.start')"
   [ "$(printf '%s' "$j" | jq -r '.turns')" = 5 ] || fail "json turns count requests, not rows"
   [ "$(printf '%s' "$j" | jq -r '.trims[0].head_before')" = 138000 ] || fail "the head at the trim is the last usage before the row, not preTokens (got $(printf '%s' "$j" | jq -r '.trims[0].head_before'))"
   [ "$(printf '%s' "$j" | jq -r '.trims[0].pre')" = 152000 ] || fail "preTokens is kept as the harness's own number"
@@ -148,7 +149,7 @@ test_no_boundary_missing_transcript_and_leader_mark() {
   point_transcript "$home" p1 "$t"
   out=$(run_vitals "$home" p1 --line) || fail "p1 must succeed"
   assert_contains "$out" "trims 0" "no boundary rows yields trims 0"
-  assert_contains "$out" "head 2.1K (peak 2.1K, mark 140K)" "small heads print with a decimal"
+  assert_contains "$out" "head 2.1K (start 1.1K, peak 2.1K, mark 140K)" "small heads print with a decimal"
   assert_contains "$out" "p1  silent" "no status file prints silent"
   out=$(run_vitals "$home" p1)
   assert_contains "$out" "logbook ?" "a missing logbook prints ?"
@@ -158,7 +159,7 @@ test_no_boundary_missing_transcript_and_leader_mark() {
   write_task "$home" p2 scout
   printf 'blocked [key=x]: waiting\n' > "$home/state/p2.status"
   out=$(run_vitals "$home" p2) || fail "p2 must succeed"
-  assert_contains "$out" "p2  blocked  head ? (peak ?, mark none)  trims ?  turns ?" "no transcript prints ? for every transcript field and mark none without a mark"
+  assert_contains "$out" "p2  blocked  head ? (start ?, peak ?, mark none)  trims ?  turns ?" "no transcript prints ? for every transcript field and mark none without a mark"
   assert_contains "$out" "last call  ?" "no transcript, no last call"
   assert_contains "$out" "repeats ?" "no transcript, no repeats"
   j=$(run_vitals "$home" p2 --json)
@@ -188,13 +189,13 @@ test_head_rounds_to_the_nearest_hundred_across_a_thousand() {
   row_assistant $((NOW - 50)) m1 1850 0 0 100 > "$t"
   point_transcript "$home" r1 "$t"
   out=$(run_vitals "$home" r1 --line) || fail "r1 must succeed"
-  assert_contains "$out" "head 2.0K (peak 2.0K" "1950 tokens read 2.0K, not 1.0K"
+  assert_contains "$out" "head 2.0K (start 2.0K, peak 2.0K" "1950 tokens read 2.0K, not 1.0K"
   write_task "$home" r2 ship "trim_mark=140000"
   t="$home/r2.jsonl"
   row_assistant $((NOW - 50)) m1 9899 0 0 100 > "$t"
   point_transcript "$home" r2 "$t"
   out=$(run_vitals "$home" r2 --line) || fail "r2 must succeed"
-  assert_contains "$out" "head 10K (peak 10K" "9999 tokens read 10K, not 9.0K"
+  assert_contains "$out" "head 10K (start 10K, peak 10K" "9999 tokens read 10K, not 9.0K"
   pass "a head whose hundreds round up past 9 carries into the thousands: 1950 is 2.0K and 9999 is 10K"
 }
 

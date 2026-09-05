@@ -40,6 +40,7 @@ FM_HOME=<home> bin/fm-crew-vitals.sh --leader <leader-id>
 
 Four lines each, from the transcript, the status log, the worktree and the logbook ([`bin/fm-crew-vitals.sh`](../bin/fm-crew-vitals.sh) says what each field reads).
 A head near the mark with no commit for an hour is a reason to read that crewmate's logbook, `data/<id>/logbook.md`, not a reason to say anything to it.
+The card's `start` is the head at the crewmate's first request, what it carried before any work: the brief (measured at every spawn, warned above 6K tokens), the project's memory files and the launch; a firstmate-repo crewmate no longer carries First Mate's job description there ([`bin/fm-spawn.sh`](../bin/fm-spawn.sh) header, "The fresh head").
 `bin/fm-lead.sh crew --leader <leader-id>` lists the crewmates with a liveness read of each endpoint; `bin/fm-crew-state.sh <id>` owns a crewmate's current state when the card's status word is not enough.
 
 ## On a trim wake

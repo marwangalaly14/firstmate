@@ -297,7 +297,7 @@ family_for_basename() {
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
     fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|\
-    fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|fm-brief-doors.test.sh|fm-lead-steer.test.sh|\
+    fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|fm-brief-doors.test.sh|fm-lead-steer.test.sh|fm-spawn-fresh-head.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
@@ -654,6 +654,7 @@ tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh 22
 tests/fm-sessionstart-nudge.test.sh 66194
 tests/fm-shared-captain-inheritance.test.sh 6108
 tests/fm-spawn-dispatch-profile.test.sh 63996
+tests/fm-spawn-fresh-head.test.sh 12000
 tests/fm-spawn-leader-chain.test.sh 24000
 tests/fm-spawn-pool-base-freshen.test.sh 34920
 tests/fm-spawn-trim-line.test.sh 30000

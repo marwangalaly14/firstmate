@@ -262,6 +262,14 @@
 # key, a leader, and a secondmate get neither line nor claim. Nothing stops,
 # warns, or throttles the crewmate: the harness trims every session somewhere,
 # and this only moves that point.
+# The fresh head: when the claude crewmate's or leader's checkout is the
+# firstmate repo itself (AGENTS.md opening "# Firstmate", CLAUDE.md its
+# pointer), the same settings file carries claudeMdExcludes for the worktree's
+# CLAUDE.md, so First Mate's job description never enters the crewmate's head
+# (measured on 2.1.259: 15.6K tokens off the first request); every other
+# project's memory files load as before. Every launch also measures the brief
+# (bytes and a four-bytes-a-token estimate) on stderr and warns above 6K
+# tokens without refusing it.
 # When the home session's frozen trace-context decision is enabled (see
 # docs/configuration.md and bin/fm-trace-context-lib.sh), the meta also records
 # one W3C traceparent= carrier, the same value injected into the pane as
@@ -2071,6 +2079,18 @@ if [ -n "$SPAWN_LEADER" ] && grep -q -x 'First Mate answers in your inbox.' "$BR
   exit 1
 fi
 
+# The brief's size is measured, never enforced: the crewmate carries the
+# whole brief from its first turn (four bytes a token is the harness's own
+# rough rule), so First Mate sees the number at every spawn and a warning
+# above 6K tokens; nothing here refuses a big brief.
+BRIEF_BYTES=$(wc -c < "$BRIEF" | tr -d ' ')
+case "$BRIEF_BYTES" in ''|*[!0-9]*) BRIEF_BYTES=0 ;; esac
+BRIEF_TOKENS=$((BRIEF_BYTES / 4))
+echo "brief $ID: $BRIEF_BYTES bytes (~$BRIEF_TOKENS tokens)" >&2
+if [ "$BRIEF_TOKENS" -gt 6000 ]; then
+  echo "warning: the brief for $ID is ~$BRIEF_TOKENS tokens, over 6K tokens; the crewmate reads all of it before its first turn (measured, not refused)" >&2
+fi
+
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -2925,8 +2945,22 @@ if [ "$KIND" != secondmate ]; then
       # summary. Leaders included; the card's own words name none of the
       # machinery.
       j_taskcard=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-task-card.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
+      # The fresh head: a checkout of the firstmate repo itself (AGENTS.md
+      # opening "# Firstmate", CLAUDE.md its pointer) would put First Mate's
+      # whole job description into the crewmate's head at every start and
+      # after every trim, though none of it is the crewmate's job. The
+      # harness's claudeMdExcludes (absolute paths, matched against the memory
+      # file's path before it is read, so the import inside it never loads)
+      # skips that one file; every other project's memory files stay. Leaders
+      # included: the brief and the coding-guidelines skill carry what a
+      # firstmate-repo crewmate needs.
+      j_memex=
+      if [ -f "$WT/AGENTS.md" ] && [ -f "$WT/CLAUDE.md" ] \
+        && [ "$(head -n 1 "$WT/AGENTS.md" 2>/dev/null)" = "# Firstmate" ]; then
+        j_memex=",\"claudeMdExcludes\":[\"$(json_escape "$WT/CLAUDE.md")\"]"
+      fi
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]},{"matcher":"compact","hooks":[{"type":"command","command":"$j_taskcard"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]},{"matcher":"compact","hooks":[{"type":"command","command":"$j_taskcard"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim$j_memex}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
