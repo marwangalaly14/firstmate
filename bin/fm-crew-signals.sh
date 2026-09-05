@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # bin/fm-crew-signals.sh - ring a led crewmate's leader once per episode when
-# the crewmate's transcript shows a stall, a loop or a drift candidate.
+# the crewmate's transcript shows a stall, a loop or a drift candidate, or its
+# trim ledger shows an ordered trim that never happened.
 # Usage: fm-crew-signals.sh <home> <task-id>
 #
 # Everything here is read from the crewmate's card (bin/fm-crew-vitals.sh
@@ -10,7 +11,7 @@
 # words never do, in the reading OR in the ring: the card carried in the ring
 # is read with --outside, which drops the card's one field written by the
 # crewmate (the logbook's next line). The leader reads that line by hand on
-# the full card. Three signals, each with a signature that names its episode:
+# the full card. Four signals, each with a signature that names its episode:
 #   stall   the crewmate is busy (the transcript's last conversation row is a
 #           tool call in flight, or a prompt or tool result the model has not
 #           answered) and nothing new has been written for FM_STUCK_CALL_SECS
@@ -27,15 +28,21 @@
 #           Signature: the commit and the logbook change it measures from.
 #   trim-order  the crewmate's trim ledger carries an order its leader gave
 #           (bin/fm-lead.sh trim) that nothing has answered - no trim event
-#           and no order-failed line - and the order is FM_LEAD_ORDER_STALE_SECS
-#           (430) old or older: the ordered trim never happened, so nobody
-#           carried the crewmate on. 430 is twice the longest compaction
-#           measured on this fleet (215 s, recorded in docs/branch-leader.md),
-#           so an ordinary slow trim is never called stale. Pending is read
-#           by bin/fm-lead-lib.sh's fm_lead_pending_order, the one reading of
-#           it this fleet has. Signature: the order's epoch, so one order
-#           rings once; a trim line or an order-failed line ends the episode
-#           by clearing the order.
+#           and no order-failed line - the order is FM_LEAD_ORDER_STALE_SECS
+#           (430) old or older, AND the crewmate is not busy: the ordered trim
+#           never happened, so nobody carried the crewmate on. Both halves are
+#           required because a typed /compact is queued by the harness and runs
+#           at the crewmate's next turn boundary (docs/branch-leader.md), so a
+#           crewmate mid-turn has an order that is waiting, not one that was
+#           lost. One honest job per signal: this one says the ordered trim did
+#           not happen, and a crewmate that never ends its turn is the stall
+#           signal's business, not this one's. 430 is twice the longest
+#           compaction measured on this fleet (215 s, recorded in
+#           docs/branch-leader.md), so an ordinary slow trim is never called
+#           stale. Pending is read by bin/fm-lead-lib.sh's
+#           fm_lead_pending_order, the one reading of it this fleet has.
+#           Signature: the order's epoch, so one order rings once; a trim line
+#           or an order-failed line ends the episode by clearing the order.
 # Each signal rings the leader named by state/<task-id>.meta's leader= line
 # once per episode: the ledger data/<task-id>/signals/index takes one row per
 # signal and signature -
@@ -56,8 +63,10 @@
 # Limits, stated plainly: an interrupted turn leaves no finished-turn row, so
 # an idle crewmate interrupted mid-call reads as busy and can ring one stall;
 # a foreground command that legitimately runs past the bound rings once too;
-# the leader judges from the card. A transcript the harness has not begun
-# (no data/<task-id>/sessions.log) yields no signal.
+# the leader judges from the card. A transcript the harness has not begun (no
+# data/<task-id>/sessions.log) yields none of the three transcript readings;
+# trim-order is read from the trim ledger and the card's clock, so it still
+# rings for a crewmate whose transcript never started.
 # Exit: 0 on every path once the arguments are valid; 2 on usage. Errors go
 # to stderr. FM_STATE_OVERRIDE and FM_DATA_OVERRIDE point the directories
 # elsewhere for tests, exactly as for the card; FM_VITALS_NOW fixes its clock.
@@ -144,7 +153,7 @@ signals=$(printf '%s' "$card" | jq -r --argjson stuck "$STUCK_SECS" --argjson dr
        + " tokens since the last commit (" + (.commit_age | age) + ") with no logbook change over that spend (bound " + ($drift | k)
        + "; logbook " + (if .logbook == "written" then ((.logbook_age | age) + " old") else .logbook end) + ")"
      else empty end),
-    (if $order_epoch != "" and .now != null and (.now - ($order_epoch | tonumber)) >= $stale then
+    (if $order_epoch != "" and .busy != true and .now != null and (.now - ($order_epoch | tonumber)) >= $stale then
        ((.now - ($order_epoch | tonumber)) as $age
         | "trim-order\t" + $order_epoch + "\tan ordered trim never happened: leader " + $order_leader
           + " ordered it " + ($age | age) + " ago and no trim event has arrived since (bound " + ($stale | age) + ")")

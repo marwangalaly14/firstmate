@@ -28,7 +28,7 @@
 #   over 1,200 characters is warned about on stderr and sent anyway: size is
 #   measured, never enforced. The exit is fm-send's.
 #   trim orders <crewmate> to trim its context: it appends
-#     ordered <epoch> <task-id> <focus|->
+#     ordered <epoch> <leader> <focus|->
 #   to data/<crewmate>/trims/index (bin/fm-trim-event.sh's ledger; it skips
 #   lines that do not start with a number when counting trims and attributes
 #   the manual trim that follows to this order), then types `/compact <focus>`

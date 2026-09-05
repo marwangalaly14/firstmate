@@ -64,7 +64,7 @@ Read that record against the story's acceptance criteria.
   The order is written into the crewmate's trim ledger first, then `/compact <focus>` is typed into its pane; a crewmate that is mid-turn queues the typed order and trims at its next turn boundary (measured live on 2.1.259: typed 8 s into a 49 s turn, queued on screen, run 10 ms after the turn ended), so an order is never an interrupt.
   The trim that follows is recorded as the leader's (`- ordered by: leader <id>`) and rings nobody, but the crewmate itself is nudged: its own trim hook sends `trim done - continue: <focus>` into its inbox when the compaction ends.
   The command does not wait for any of that: it marks the order, types `/compact`, and returns, so nothing you run has to outlive a compaction for the crewmate to be told to carry on. The nudge is an append, so [the law of the head](#the-law-of-the-head) holds.
-  If the trim never happens at all - a session that died, a typed order the pane never reached a turn boundary to run - the order stands unanswered in the ledger and the watcher's signals check rings you once, after `FM_LEAD_ORDER_STALE_SECS` (430 s: twice the longest compaction measured on this fleet, where they take 100-215 s), naming the crewmate, how long ago you ordered it and that no trim event ever arrived. Each half has an owner: the crewmate's hook carries it on when the trim happens, the signals check tells you when it does not.
+  If the trim never happens at all - a session that died, a typed order the pane never reached a turn boundary to run - the order stands unanswered in the ledger and the watcher's signals check rings you once, after `FM_LEAD_ORDER_STALE_SECS` (430 s: twice the longest compaction measured on this fleet, where they take 100-215 s) and only while the crewmate is idle, naming the crewmate, how long ago you ordered it and that no trim event ever arrived. A crewmate still mid-turn is never reported: its order is queued behind the turn, not lost. Each half has an owner: the crewmate's hook carries it on when the trim happens, the signals check tells you when it does not.
 - If the story is two stories, write the split note for First Mate in your logbook and status.
 - If the crewmate cannot be steered back, write the handover note from its logbook; First Mate relaunches, because a relaunch is irreversible and the leader never performs one.
 
@@ -73,11 +73,12 @@ A steer that sits in the inbox at that moment is on the card.
 
 ## On a signal
 
-Every five minutes the watcher reads each of your crewmates' cards and rings you, once per episode, when the transcript shows one of three shapes ([`bin/fm-crew-signals.sh`](../bin/fm-crew-signals.sh)):
+Every five minutes the watcher reads each of your crewmates' cards and rings you, once per episode, in one of four shapes - three read from the transcript, the fourth from the crewmate's trim ledger ([`bin/fm-crew-signals.sh`](../bin/fm-crew-signals.sh)):
 
 - `signal: <id> stall: busy with nothing new for 17m (bound 15m); last call Bash \`...\`` - a tool call in flight, or a prompt the model has not answered, with nothing written for `FM_STUCK_CALL_SECS` (900): stuck in one call or wedged.
 - `signal: <id> loop: loop 3x Bash \`bash tests/x.test.sh\` in the last 30 calls` - the same command three or more times in the last 30 calls, the same file read five or more times, or an A-B-A-B bounce.
 - `signal: <id> drift?: 46K tokens since the last commit (82m) with no logbook change over that spend (bound 40K; logbook untouched)` - `FM_DRIFT_TOKENS` (40,000) spent since the last commit while the logbook did not change. A candidate, never a verdict: the question mark is deliberate.
+- `signal: <id> trim-order: an ordered trim never happened: leader <you> ordered it 8m ago and no trim event has arrived since (bound 7m)` - a trim you ordered that nothing answered for `FM_LEAD_ORDER_STALE_SECS` (430 s) while the crewmate sat idle. A busy crewmate never rings this: a typed `/compact` waits for its turn to end, so an order under a working crewmate is queued, not lost, and a crewmate that never ends its turn is the stall signal's business instead.
 
 The ring carries the crewmate's card and the steer command.
 It is mechanical, from the transcript and nowhere else: nothing the crewmate writes, says or reports enters it, so a logbook that claims progress does not quiet a loop the transcript shows.

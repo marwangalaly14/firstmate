@@ -419,11 +419,31 @@ test_a_trim_order_that_was_never_answered_rings_the_leader() {
   [ "$(inbox_count lead-a)" -eq 1 ] || fail "the same order does not ring twice, inbox has $(inbox_count lead-a)"
   [ "$(ledger_count c1)" -eq 1 ] || fail "and adds no row, ledger has $(ledger_count c1)"
 
+  # A crewmate mid-turn has an order that is waiting, not one that was lost:
+  # a typed /compact runs at its next turn boundary, so however old the order
+  # is, a busy crewmate never rings this signal.
+  mkdir -p "$DATA/c2/trims"
+  printf 'ordered\t%s\tlead-a\tkeep the spec\n' "$((NOW - 5000))" > "$DATA/c2/trims/index"
+  row_assistant $((NOW - 60)) m1 100 0 0 10 "$(tool_bash 'bash tests/slow.test.sh')" >> "$(transcript c2)"
+  run_signals FM_VITALS_NOW="$NOW" -- c2
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] || fail "a busy crewmate never rings a stale order, got rc=$RC '$OUT' ($ERR)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "and nothing is sent for it, inbox has $(inbox_count lead-a)"
+  [ ! -e "$DATA/c2/signals" ] || fail "and no row is written for it"
+  # The same ledger the moment the crewmate's turn ends: the order is lost, and
+  # this rings.
+  row_assistant $((NOW - 50)) m2 100 0 0 10 >> "$(transcript c2)"
+  run_signals FM_VITALS_NOW="$NOW" -- c2
+  assert_contains "$OUT" "trim-order	rung	an ordered trim never happened: leader lead-a ordered it 83m ago" "the same order rings once the crewmate is idle"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "the idle crewmate's stale order rings the leader, inbox has $(inbox_count lead-a)"
+  [ "$(ledger_rows c2)" = "trim-order rung" ] || fail "the ledger records the ring, got: $(ledger_rows c2)"
+  : > "$(transcript c2)"
+  rm -rf "$DATA/c2/signals"
+
   # An order inside the bound is an ordinary slow trim: nothing rings.
   printf 'ordered\t%s\tlead-a\tkeep the spec\n' "$((NOW - 100))" > "$DATA/c2/trims/index"
   run_signals FM_VITALS_NOW="$NOW" -- c2
   [ "$RC" -eq 0 ] && [ -z "$OUT" ] || fail "an order inside the bound rings nothing, got rc=$RC '$OUT' ($ERR)"
-  [ "$(inbox_count lead-a)" -eq 1 ] || fail "and sends nothing, inbox has $(inbox_count lead-a)"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "and sends nothing, inbox has $(inbox_count lead-a)"
   [ "$(ledger_count c2)" -eq 0 ] || fail "and writes no row, ledger has $(ledger_count c2)"
 
   # An order the crewmate's trim answered inside the bound never rings, at any
@@ -434,7 +454,7 @@ test_a_trim_order_that_was_never_answered_rings_the_leader() {
   } > "$DATA/c2/trims/index"
   run_signals FM_VITALS_NOW="$NOW" -- c2
   [ "$RC" -eq 0 ] && [ -z "$OUT" ] || fail "an answered order never rings, however old, got rc=$RC '$OUT' ($ERR)"
-  [ "$(inbox_count lead-a)" -eq 1 ] || fail "and sends nothing, inbox has $(inbox_count lead-a)"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "and sends nothing, inbox has $(inbox_count lead-a)"
   # An order the leader itself abandoned is closed too.
   {
     printf 'ordered\t%s\tlead-a\tkeep the spec\n' "$((NOW - 5000))"
@@ -443,7 +463,7 @@ test_a_trim_order_that_was_never_answered_rings_the_leader() {
   run_signals FM_VITALS_NOW="$NOW" -- c2
   [ "$RC" -eq 0 ] && [ -z "$OUT" ] || fail "an order-failed line closes the order, got rc=$RC '$OUT' ($ERR)"
   [ "$(queue_records)" -eq 0 ] || fail "First Mate is not woken for any of it"
-  pass "an ordered trim nothing answered rings its leader once past the bound, naming the crewmate, the age and that no trim event came; an order inside the bound, one a trim answered and one the leader abandoned ring nobody"
+  pass "an ordered trim nothing answered rings its leader once past the bound, naming the crewmate, the age and that no trim event came, and only while the crewmate is idle: a busy one is never reported however old the order, and an order inside the bound, one a trim answered and one the leader abandoned ring nobody"
 }
 
 test_dead_leader_is_recorded_once() {

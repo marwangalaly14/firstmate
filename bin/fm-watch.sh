@@ -1266,7 +1266,8 @@ signal_files_actionable() {  # <status-file> ...
 # FM_SIGNAL_CHECK_SECS (300) per led crewmate, the poll runs
 # bin/fm-crew-signals.sh, which reads the crewmate's card (the transcript,
 # the worktree's HEAD, the logbook's mtime) and rings the leader once per
-# episode of a stall, a loop or a drift candidate, keeping
+# episode of a stall, a loop, a drift candidate or a trim its leader ordered
+# that never happened, keeping
 # data/<id>/signals/index. That script owns the readings and the ledger;
 # this loop owns only the cadence (kept in memory, so a restart checks at
 # once and the ledger keeps it from ringing twice) and writes the script's
@@ -1995,8 +1996,9 @@ while :; do
   # The chain's one bounded escalation (leader_doors_overdue): a led crewmate's
   # door its leader has held past the bound wakes First Mate once, here.
   leader_doors_overdue
-  # The chain's transcript signals (led_signal_checks): a led crewmate's
-  # stall, loop or drift candidate rings its leader, never First Mate.
+  # The chain's crewmate signals (led_signal_checks): a led crewmate's stall,
+  # loop, drift candidate or unanswered trim order rings its leader, never
+  # First Mate.
   led_signal_checks
 
   # On the first changed signal, linger one grace period and re-scan before
