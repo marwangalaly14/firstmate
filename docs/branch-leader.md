@@ -22,6 +22,11 @@ A led crewmate's brief gives it exactly two reasons to surface before its story 
 - `blocked: [key=stuck] {what it tried, what it sees}` when it is looping or drifting.
   Answer in one steer, or escalate to First Mate.
 
+Each door reaches the leader's own inbox the moment the crewmate's turn ends: the crewmate's Stop hook runs [`bin/fm-lead-relay.sh`](../bin/fm-lead-relay.sh), which puts two lines into the leader's steering inbox, `door: <crewmate-id> <verb> [key=<key>] <note>` and the exact steer that closes it, and records the ring in the crewmate's door ledger, `data/<crewmate-id>/doors/index`.
+While the leader holds a door, First Mate is not woken for it: the watcher absorbs that crewmate's door line and its turn-end for as long as the leader's endpoint is alive and the door is open, and First Mate still sees the open door in every drain's open-decisions section.
+First Mate is woken for the door, once, when it has stayed open 30 minutes (`FM_LEADER_ESCALATE_SECS`, 1,800 by default), at once when the leader has died holding it, and at once when the ring could not reach the leader or the crewmate's status carries anything else First Mate must see ([`bin/fm-watch.sh`](../bin/fm-watch.sh) header, "the chain").
+So a door is the leader's to answer within the half hour, or to escalate to First Mate in its own status.
+
 Both are answered through the crewmate's steering inbox and closed by the answer itself:
 
 ```sh
@@ -29,6 +34,7 @@ FM_HOME=<home> bin/fm-lead.sh steer --leader <leader-id> <crewmate-id> --resolve
 ```
 
 The key on `--resolve-key` is the door's key (`story-size` or `stuck`); the record stays open until a `resolved` line carrying that exact key lands, and `fm-send` writes that line at answer time ([`bin/fm-send.sh`](../bin/fm-send.sh) header).
+The ledger then records the door as answered at the watcher's next poll; a door that was rung, escalated or answered is never rung twice.
 
 ## At every checkpoint
 

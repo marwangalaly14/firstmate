@@ -83,7 +83,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-gate-refuse-lib.sh`  | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints               |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
-| `fm-watch.sh`            | Singleton-safe watcher: absorb benign wakes, detect stalled local-secondmate wake queues, and exit on actionable ones |
+| `fm-watch.sh`            | Singleton-safe watcher: absorb benign wakes, hold a led crewmate's rung door for its live leader (waking First Mate once past `FM_LEADER_ESCALATE_SECS` or when the leader dies), detect stalled local-secondmate wake queues, and exit on actionable ones |
 | `fm-inactive-reconcile.sh` | Reconcile long-inactive direct crewmate terminal outcomes without forge access |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |
@@ -112,6 +112,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-session-event.sh`    | Append a claude task's real session id, transcript path, model, and effort to `data/<id>/sessions.log` from its SessionStart hook |
 | `fm-lead.sh`             | The branch leader's hands and eyes over its own crewmates: `crew` lists the tasks recorded under a leader with `fm-lead-lib.sh`'s liveness read (fm-backend's recovery-grade agent read, then the digest's cheap presence read where that cannot classify); `steer` sends one of them text through `fm-send` (refusing a crewmate outside the chain or dead), notes it on the leader's status and measures it; `trim` writes an order into the crewmate's trim ledger, then types `/compact <focus>` into its pane; the leader's own moments are in [branch-leader.md](branch-leader.md) |
 | `fm-lead-lib.sh`         | One owner of the branch-leader chain (`leader=` in task meta), who may lead, and the four-crewmate ceiling the spawn enforces |
+| `fm-lead-relay.sh`       | A led crewmate's door relay: rings each new keyed door line (`needs-decision [key=...]`, `blocked [key=...]`) into its leader's steering inbox through `fm-send`, once, behind a cursor, and writes the door ledger `data/<id>/doors/index` (`rung`, `failed:<why>`) that `fm-watch.sh` reads to hold the door for the leader; runs from a led claude crewmate's Stop hook and from the watcher |
 | `fm-compact-lib.sh`      | One owner of the 140K line (the mark, the harness's two terms, the derived `autoCompactWindow`) and of the keep-set every trim's summary must keep |
 | `fm-compact-keep.sh`     | Print the keep-set to the harness's summarizer from a claude PreCompact hook, before every automatic or typed trim |
 | `fm-logbook-lib.sh`      | One owner of a crewmate's logbook, `data/<id>/logbook.md`: its path, its four-heading template, and the create-once init the spawn runs for crewmates and leaders |

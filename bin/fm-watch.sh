@@ -133,6 +133,10 @@ mkdir -p "$STATE"
 # gate and the wake emission (inbox_steer_check below).
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# The chain: a led crewmate's door is its leader's (leader_holds_signal
+# below). bin/fm-lead-lib.sh owns the leader's liveness read.
+# shellcheck source=bin/fm-lead-lib.sh
+. "$SCRIPT_DIR/fm-lead-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -1240,6 +1244,223 @@ signal_files_actionable() {  # <status-file> ...
   return "$found"
 }
 
+# --- the chain: a led crewmate's door is its leader's -------------------------
+# bin/fm-lead-relay.sh puts a led crewmate's keyed door lines (needs-decision
+# [key=story-size], blocked [key=stuck]; leader= in its meta) into its leader's
+# steering inbox and writes data/<id>/doors/index. While the leader HOLDS a
+# door - the ledger says rung, the key is still open in the status log, and the
+# leader's endpoint holds a live agent - that crewmate's signals are absorbed
+# here instead of waking First Mate: its status span when every new
+# captain-relevant line is such a door (one the hook has not rung yet is rung
+# from here first), and its bare turn-end, because a crewmate stopping at its
+# door is the expected shape. First Mate still sees the open door in every
+# drain's OPEN DECISIONS and unread-status annotation; it is simply not woken
+# for it. It IS woken, unchanged in form (a signal wake on the status log):
+# once when the door stays open past FM_LEADER_ESCALATE_SECS (1,800) or when
+# the leader holding it stops being alive, the ledger then saying escalated;
+# and at once when the ring found the leader dead or unclassifiable, when the
+# ring failed, or when the span carries any other captain-relevant line. An
+# unled crewmate never enters this path, and nothing here reaches the
+# crewmate.
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+LEADER_ESCALATE_SECS=${FM_LEADER_ESCALATE_SECS:-1800}
+case "$LEADER_ESCALATE_SECS" in ''|*[!0-9]*) LEADER_ESCALATE_SECS=1800 ;; esac
+
+door_ledger() { printf '%s/%s/doors/index' "$DATA" "$1"; }  # <task>
+
+task_leader_of() {  # <task> -> the recorded leader id, or ? when none
+  local leader
+  leader=$(fm_meta_get "$STATE/$1.meta" leader 2>/dev/null) || leader=
+  printf '%s' "${leader:-?}"
+}
+
+# The ledger's latest row for <key> of <task>, read into DOOR_STATE (rung,
+# escalated, answered, failed:<why>, or none) and DOOR_ROW_EPOCH (that row's
+# epoch; 0 when none). Called directly, never in a substitution, so both land
+# in the caller.
+door_key_read() {  # <task> <key>
+  local ledger e result leader key rest
+  DOOR_STATE=none
+  DOOR_ROW_EPOCH=0
+  ledger=$(door_ledger "$1")
+  [ -f "$ledger" ] || return 0
+  while IFS=$(printf '\t') read -r e result leader key rest; do
+    [ "$key" = "$2" ] || continue
+    DOOR_STATE=$result
+    DOOR_ROW_EPOCH=$e
+  done < "$ledger"
+  case "$DOOR_ROW_EPOCH" in ''|*[!0-9]*) DOOR_ROW_EPOCH=0 ;; esac
+  return 0
+}
+
+# 0 when the ledger has a rung row for exactly this status line (tabs read as
+# spaces, as the relay writes them).
+door_line_rung() {  # <task> <status-line>
+  local ledger flat e result leader key rest
+  ledger=$(door_ledger "$1")
+  [ -f "$ledger" ] || return 1
+  flat=$(printf '%s' "$2" | tr '\t' ' ')
+  while IFS=$(printf '\t') read -r e result leader key rest; do
+    [ "$result" = rung ] && [ "$rest" = "$flat" ] && return 0
+  done < "$ledger"
+  return 1
+}
+
+# Prints <task>'s leader and returns 0 only when the task is led and that
+# leader's own record exists and holds a live agent.
+task_leader_alive() {  # <task>
+  local meta="$STATE/$1.meta" leader state
+  [ -f "$meta" ] || return 1
+  leader=$(fm_meta_get "$meta" leader 2>/dev/null) || return 1
+  [ -n "$leader" ] && [ -f "$STATE/$leader.meta" ] || return 1
+  state=$(fm_lead_endpoint_state "$STATE/$leader.meta" "$leader" 2>/dev/null) || return 1
+  [ "$state" = alive ] || return 1
+  printf '%s' "$leader"
+}
+
+# 0 when <task> has an open door (the classifier's fold) whose ledger state is
+# rung: rung to the leader and not yet escalated or answered.
+task_door_held() {  # <task>
+  local f="$STATE/$1.status" open key _verb _note
+  open=$(status_open_decisions "$f") || return 1
+  [ -n "$open" ] || return 1
+  while IFS=$(printf '\t') read -r key _verb _note; do
+    [ -n "$key" ] || continue
+    door_key_read "$1" "$key"
+    [ "$DOOR_STATE" = rung ] && return 0
+  done <<EOF
+$open
+EOF
+  return 1
+}
+
+# 0 when this signal file belongs to a led crewmate whose leader holds its
+# door, so the file may be absorbed. A led crewmate's status signal is first
+# put through the relay (cursor-guarded, so a door the Stop hook already rang
+# is not rung again): the hook may not have run yet, or the crewmate may not
+# have one, and either way the ledger then says rung or why not before the
+# hold is judged.
+leader_holds_signal() {  # <status-or-turn-ended-file>
+  local f=$1 task start span line key doors=0 events
+  case "$f" in
+    *.status) task=$(basename "$f"); task=${task%.status} ;;
+    *.turn-ended) task=$(basename "$f"); task=${task%.turn-ended} ;;
+    *) return 1 ;;
+  esac
+  [ "$(task_leader_of "$task")" != '?' ] || return 1
+  case "$f" in
+    *.status)
+      [ -f "$f" ] && [ ! -L "$f" ] || return 1
+      "$SCRIPT_DIR/fm-lead-relay.sh" "$FM_HOME" "$task" >/dev/null 2>&1 || true
+      task_leader_alive "$task" >/dev/null || return 1
+      start=$(fm_wake_signal_seen_size "$STATE" "$f")
+      case "$start" in ''|*[!0-9]*) start=0 ;; esac
+      span=$(tail -c "+$((start + 1))" "$f" 2>/dev/null) || return 1
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+        status_is_captain_relevant "$line" || continue
+        key=$(status_line_decision_key "$line") || return 1
+        door_line_rung "$task" "$line" || return 1
+        doors=$((doors + 1))
+      done <<EOF
+$span
+EOF
+      # A key transition the classifier flags for reconciliation is First
+      # Mate's to see, never the leader's to hold.
+      events=$(status_span_first_actionable "$f" "$start") || true
+      case "$events" in *"reconciliation-required: "*) return 1 ;; esac
+      if [ "$doors" -eq 0 ]; then
+        task_door_held "$task" || return 1
+      fi
+      ;;
+    *)
+      task_leader_alive "$task" >/dev/null || return 1
+      task_door_held "$task" || return 1
+      ;;
+  esac
+  return 0
+}
+
+# Absorb the held signal files of one batch ("<seen>\t<sig>\t<file>" lines):
+# advance every marker the surfacing path would (the wake signature, the
+# classified position, the heartbeat backstop's position), so neither this
+# path nor the backstop re-reads the door; the drain's presentation cursor is
+# untouched, so the door line is still unread there. Logs each absorb.
+leader_absorb_signals() {  # <pending-lines>
+  local sf sig f task size ident logged=''
+  while IFS=$(printf '\t') read -r sf sig f; do
+    [ -n "$sf" ] || continue
+    task=$(basename "$f"); task=${task%.*}
+    case "$f" in
+      *.status)
+        fm_wake_status_reported_commit "$STATE" "$f" "$sig" || true
+        mark_surface_reported "$f" "$sig" || true
+        size=$(LC_ALL=C wc -c < "$f" 2>/dev/null | tr -d '[:space:]')
+        ident=$(status_file_identity "$f") || ident=
+        if [ -n "$ident" ] && fm_wake_status_mark_current "$STATE" "$f"; then
+          mark_surfaced "$f" "$size" "$ident" || true
+        fi
+        ;;
+      *) printf '%s' "$sig" > "$sf" ;;
+    esac
+    # The batch lists a file once per scan (the re-scan after the grace
+    # period repeats it with its newest signature): every listing advances the
+    # markers, the log names the file once.
+    case " $logged " in *" $f "*) continue ;; esac
+    logged="$logged $f"
+    triage_log "absorbed door signal held by leader $(task_leader_of "$task"): $f"
+  done <<EOF
+$1
+EOF
+}
+
+# Once per poll: every rung, still-open door wakes First Mate once when it is
+# older than the bound or when the leader holding it is no longer alive
+# (nobody holds it then), and a rung door the status log shows closed is
+# recorded as answered so it is not read again. Exits the cycle through
+# wake() on the first escalation, as every actionable wake does.
+leader_doors_overdue() {
+  local ledger task f open key _verb _note now age reason leader why
+  local _e result _leader _rest
+  now=$(date +%s)
+  for ledger in "$DATA"/*/doors/index; do
+    [ -f "$ledger" ] || continue
+    task=${ledger%/doors/index}; task=${task##*/}
+    f="$STATE/$task.status"
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    open=$(status_open_decisions "$f") || continue
+    # A rung door the fold no longer lists is answered: record it once.
+    while IFS=$(printf '\t') read -r _e result _leader key _rest; do
+      [ "$result" = rung ] || continue
+      case "$open" in "$key"$'\t'*|*$'\n'"$key"$'\t'*) continue ;; esac
+      door_key_read "$task" "$key"
+      [ "$DOOR_STATE" = rung ] || continue
+      printf '%s\tanswered\t%s\t%s\t-\n' "$now" "$_leader" "$key" >> "$ledger" 2>/dev/null || true
+    done < "$ledger"
+    [ -n "$open" ] || continue
+    while IFS=$(printf '\t') read -r key _verb _note; do
+      [ -n "$key" ] || continue
+      door_key_read "$task" "$key"
+      [ "$DOOR_STATE" = rung ] || continue
+      age=$((now - DOOR_ROW_EPOCH))
+      leader=$(task_leader_of "$task")
+      if task_leader_alive "$task" >/dev/null; then
+        [ "$age" -ge "$LEADER_ESCALATE_SECS" ] || continue
+        why="has stayed open ${age}s under its leader $leader, past the ${LEADER_ESCALATE_SECS}s bound: the leader was rung and has not closed it"
+      else
+        why="was rung to its leader $leader, whose endpoint no longer holds a live agent: nobody holds it"
+      fi
+      printf '%s\tescalated\t%s\t%s\t-\n' "$now" "$leader" "$key" >> "$ledger" 2>/dev/null || true
+      reason="signal: $f (door [key=$key] of $task $why)"
+      fm_wake_append signal "$task.status" "$reason" || exit 1
+      wake "$reason"
+    done <<EOF
+$open
+EOF
+  done
+  return 0
+}
+
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
 # fm-push-transition-lib.sh because push and poll paths must write one format.
 # Mark each actionable status log through the endpoint captured by the heartbeat
@@ -1690,6 +1911,10 @@ while :; do
     touch "$STATE/.last-check"
   fi
 
+  # The chain's one bounded escalation (leader_doors_overdue): a led crewmate's
+  # door its leader has held past the bound wakes First Mate once, here.
+  leader_doors_overdue
+
   # On the first changed signal, linger one grace period and re-scan before
   # classifying: a crewmate's final status write and the same turn's turn-end
   # hook land seconds apart, and reporting them as separate actionable wakes
@@ -1712,6 +1937,34 @@ while :; do
     done <<EOF
 $pending
 EOF
+    # The chain (leader_holds_signal above): a led crewmate's signal whose door
+    # its leader holds is absorbed file by file before the batch is judged, so
+    # the rest of the batch is triaged exactly as before and an empty rest
+    # wakes nobody.
+    held_pending=''
+    rest_pending=''
+    while IFS=$(printf '\t') read -r sf sig f; do
+      [ -n "$sf" ] || continue
+      if leader_holds_signal "$f"; then
+        held_pending="${held_pending}${sf}"$'\t'"${sig}"$'\t'"${f}"$'\n'
+      else
+        rest_pending="${rest_pending}${sf}"$'\t'"${sig}"$'\t'"${f}"$'\n'
+      fi
+    done <<EOF
+$pending
+EOF
+    if [ -n "$held_pending" ]; then
+      leader_absorb_signals "$held_pending"
+      pending=$rest_pending
+      files=""
+      while IFS=$(printf '\t') read -r sf sig f; do
+        [ -n "$sf" ] || continue
+        case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
+      done <<EOF
+$pending
+EOF
+    fi
+    if [ -n "$files" ]; then
     reason="signal:$files"
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;
@@ -1799,6 +2052,7 @@ EOF
         wake "$reason"
       fi
       triage_log "absorbed benign $reason"
+    fi
     fi
   fi
 

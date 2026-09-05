@@ -372,6 +372,30 @@ test_a_led_crewmate_relaunches_under_its_recorded_leader() {
   pass "a led crewmate relaunches with its brief naming its recorded leader, keeps one leader line, and a brief that disagrees with the record is refused"
 }
 
+# The door relay (bin/fm-lead-relay.sh) rides a led claude crewmate's Stop
+# hook, after the busy-event writer; an unled crewmate's hook is exactly as
+# before. Read from the settings the spawn writes into the worktree.
+test_led_crewmates_stop_hook_runs_the_door_relay() {
+  local rec out status stop_hook
+  rec=$(make_home relay-hook)
+  read_home "$rec"
+  write_leader "$HOME_DIR" "$PROJ_DIR" lead-a
+  out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" c1 --leader lead-a); status=$?
+  [ "$status" -eq 0 ] || fail "the led spawn must succeed (exit $status)"$'\n'"$out"
+  stop_hook=$(jq -r '.hooks.Stop[0].hooks[0].command' "$PROJ_DIR.wt-c1/.claude/settings.local.json")
+  assert_contains "$stop_hook" "fm-lead-relay.sh" "a led crewmate's Stop hook runs the door relay"
+  assert_contains "$stop_hook" "fm-lead-relay.sh' '$HOME_DIR' 'c1' 2>/dev/null || true" "with this home and the crewmate's id, never able to fail the hook"
+  case "$stop_hook" in
+    *"--event stop 2>/dev/null || true; "*"fm-lead-relay.sh"*) ;;
+    *) fail "the relay runs after the busy-event writer, got:"$'\n'"$stop_hook" ;;
+  esac
+  out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" lone); status=$?
+  [ "$status" -eq 0 ] || fail "the unled spawn must succeed (exit $status)"$'\n'"$out"
+  stop_hook=$(jq -r '.hooks.Stop[0].hooks[0].command' "$PROJ_DIR.wt-lone/.claude/settings.local.json")
+  assert_not_contains "$stop_hook" "fm-lead-relay" "an unled crewmate's Stop hook is exactly as before"
+  pass "a led claude crewmate's Stop hook runs the door relay after the busy-event writer; an unled crewmate's hook does not"
+}
+
 test_fifth_crewmate_is_refused_until_one_is_torn_down() {
   local rec out status
   rec=$(make_home ceiling)
@@ -450,6 +474,7 @@ test_brief_and_spawn_must_agree_on_the_leader
 test_bad_leader_values_are_refused_before_any_record
 test_leader_is_refused_with_secondmate_and_relaunch
 test_a_led_crewmate_relaunches_under_its_recorded_leader
+test_led_crewmates_stop_hook_runs_the_door_relay
 test_fifth_crewmate_is_refused_until_one_is_torn_down
 test_lead_crew_lists_a_leaders_crewmates
 

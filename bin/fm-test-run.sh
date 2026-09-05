@@ -239,7 +239,7 @@ family_for_basename() {
     fm-wake-drain-unread-status.test.sh|\
     fm-tool-update-check.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
-    fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
+    fm-watch-triage.test.sh|fm-task-inbox.test.sh|fm-lead-route-up.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
@@ -601,6 +601,7 @@ tests/fm-herdr-version-floor-live-e2e.test.sh 23
 tests/fm-home-summary-refresh.test.sh 34793
 tests/fm-inactive-reconcile.test.sh 41826
 tests/fm-kimi-harness.test.sh 18015
+tests/fm-lead-route-up.test.sh 70000
 tests/fm-lead-steer.test.sh 9000
 tests/fm-lint-workflows.test.sh 855
 tests/fm-logbook.test.sh 8000
