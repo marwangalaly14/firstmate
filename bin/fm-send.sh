@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--from-leader <id>|--captain|--lifecycle <action>] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -190,6 +190,31 @@
 # working:, or done: event still cannot clear a captain decision. The flag is
 # refused with --key, with an explicit backend target (no task ledger in this
 # home), and with an empty message.
+#
+# The led channel: while a leader exists, First Mate reaches a working
+# crewmate with lifecycle and the captain's words only, never the work (the
+# captain's rule; docs/branch-leader.md). Built here, not written: a target
+# whose record carries leader=<id> (bin/fm-lead-lib.sh) with that leader's
+# record present and its endpoint holding a live agent is "led", and to a led
+# target fm-send refuses ordinary text, typed text and --resolve-key alike,
+# printing the leader's steer command, unless the send carries exactly one of
+# three marks, recorded in the inbox record's header as mark=<mark>:
+#   --from-leader <id>    the leader's own steer; <id> must be the recorded
+#                         leader (bin/fm-lead.sh steer and trim pass it)
+#   --captain             the captain's words; the message must already stand
+#                         verbatim under "## Captain's intent" in
+#                         data/<id>/brief.md (the rule that the captain's words
+#                         are appended there first), else refused
+#   --lifecycle <action>  relaunch, teardown, handover or escalation; the
+#                         action rides in the mark, so an escalated door (the
+#                         watcher's 30-minute wake, or the leader dead) is
+#                         answered with --resolve-key --lifecycle escalation
+# --key stays open (Enter, Escape and C-c are lifecycle) and takes no mark. A
+# dead leader, a missing leader record or no leader= at all leaves the channel
+# as it always was; a mark given where none was required is still recorded.
+# An explicit backend target names an endpoint, not a task, and is not led.
+# The refusal happens before any durable mutation: nothing is written, rung,
+# typed or closed. tests/fm-send-led-channel.test.sh proves each path.
 #
 # After a successful TYPED-plane submit fm-send pauses FM_SEND_SETTLE seconds
 # (default 1, 0 disables) before returning: submit confirmation only proves the
@@ -449,6 +474,11 @@ fi
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
+LED_MARK=
+fm_send_set_mark() {  # <mark>: at most one of the led channel's marks per send
+  [ -z "$LED_MARK" ] || { echo "error: one mark per send: --from-leader, --captain and --lifecycle name different senders (had $LED_MARK, got $1)" >&2; return 1; }
+  LED_MARK=$1
+}
 fm_send_add_resolve_key() {  # <key>
   local k=$1
   case "$k" in
@@ -486,6 +516,25 @@ while :; do
       [ -z "$FIRE_AND_FORGET_ID" ] || { echo "error: duplicate --fire-and-forget" >&2; exit 1; }
       FIRE_AND_FORGET_ID=${1#--fire-and-forget=}
       shift
+      ;;
+    --from-leader|--from-leader=*)
+      if [ "$1" = --from-leader ]; then v=${2:-}; n=2; else v=${1#--from-leader=}; n=1; fi
+      case "$v" in ''|--*) echo "error: --from-leader requires the leader's task id" >&2; exit 1 ;; esac
+      fm_send_set_mark "from-leader:$v" || exit 1
+      shift "$n"
+      ;;
+    --captain)
+      fm_send_set_mark captain || exit 1
+      shift
+      ;;
+    --lifecycle|--lifecycle=*)
+      if [ "$1" = --lifecycle ]; then v=${2:-}; n=2; else v=${1#--lifecycle=}; n=1; fi
+      case "$v" in
+        relaunch|teardown|handover|escalation) ;;
+        *) echo "error: --lifecycle takes one of relaunch, teardown, handover, escalation (got '${v:-nothing}')" >&2; exit 1 ;;
+      esac
+      fm_send_set_mark "lifecycle:$v" || exit 1
+      shift "$n"
       ;;
     *) break ;;
   esac
@@ -565,6 +614,60 @@ fm_send_resolve_close_note() {  # <key> <excerpt>
   fi
   printf 'answered: %s' "$excerpt"
 }
+
+# The led channel (header, "The led channel"): decided before any durable
+# mutation, from the target's record and its leader's liveness.
+# shellcheck source=bin/fm-lead-lib.sh
+. "$SCRIPT_DIR/fm-lead-lib.sh"
+LED_TASK_ID=
+LED_LEADER=
+if [ -n "$TARGET_META" ]; then
+  LED_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
+  LED_LEADER=$(fm_meta_get "$TARGET_META" leader 2>/dev/null) || LED_LEADER=
+fi
+if [ -n "$LED_MARK" ] && [ "${1:-}" = "--key" ]; then
+  echo "error: a mark cannot accompany --key; a keystroke is lifecycle already" >&2
+  exit 1
+fi
+case "$LED_MARK" in
+  from-leader:*)
+    if [ -z "$LED_TASK_ID" ]; then
+      echo "error: --from-leader applies to a task recorded in this home, not an explicit endpoint" >&2
+      exit 1
+    fi
+    if [ -z "$LED_LEADER" ]; then
+      echo "error: $LED_TASK_ID has no leader; --from-leader applies to a led crewmate" >&2
+      exit 1
+    fi
+    if [ "${LED_MARK#from-leader:}" != "$LED_LEADER" ]; then
+      echo "error: $LED_TASK_ID is led by $LED_LEADER, not ${LED_MARK#from-leader:}; a leader steers only its own chain" >&2
+      exit 1
+    fi
+    ;;
+  captain)
+    if [ -z "$LED_TASK_ID" ]; then
+      echo "error: --captain applies to a task recorded in this home, not an explicit endpoint" >&2
+      exit 1
+    fi
+    LED_BRIEF="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md"
+    LED_INTENT=$(awk '/^## Captain'"'"'s intent$/{f=1; next} f && /^#/{exit} f' "$LED_BRIEF" 2>/dev/null || true)
+    case "$LED_INTENT" in
+      *"$*"*) [ -n "$*" ] || LED_INTENT= ;;
+      *) LED_INTENT= ;;
+    esac
+    if [ -z "$LED_INTENT" ]; then
+      echo "error: --captain carries the captain's words, and these do not stand under \"## Captain's intent\" in $LED_BRIEF; append the captain's words there verbatim first, then send the same words. Nothing was sent." >&2
+      exit 1
+    fi
+    ;;
+esac
+if [ -z "$LED_MARK" ] && [ "${1:-}" != "--key" ] && [ -n "$LED_LEADER" ] && [ -f "$STATE/$LED_LEADER.meta" ] \
+  && [ "$(fm_lead_endpoint_state "$STATE/$LED_LEADER.meta" "$LED_LEADER" 2>/dev/null)" = alive ]; then
+  echo "error: $LED_TASK_ID is led by $LED_LEADER (alive): while a leader exists, First Mate reaches a working crewmate with lifecycle and the captain's words only; the work is the leader's to steer:
+  FM_HOME=$FM_HOME bin/fm-lead.sh steer --leader $LED_LEADER $LED_TASK_ID \"<one line>\"
+First Mate's own sends carry a mark: --lifecycle <relaunch|teardown|handover|escalation> for a lifecycle action, --captain for the captain's words (appended verbatim to ${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md under \"## Captain's intent\" first), or --key for a keystroke; nothing was sent." >&2
+  exit 1
+fi
 
 if [ -n "$FIRE_AND_FORGET_ID" ]; then
   printf '%s' "$FIRE_AND_FORGET_ID" | grep -Eq '^[a-f0-9]{16}$' \
@@ -958,10 +1061,10 @@ else
     fi
     if [ "${FM_SEND_IDEMPOTENT:-0}" = 1 ]; then
       INBOX_RECORD=$(fm_task_inbox_write_idempotent "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
-        "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
+        "${FIRE_AND_FORGET_ID:+fire-and-forget}" "$LED_MARK") || inbox_write_rc=$?
     else
       INBOX_RECORD=$(fm_task_inbox_write "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
-        "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
+        "${FIRE_AND_FORGET_ID:+fire-and-forget}" "$LED_MARK") || inbox_write_rc=$?
     fi
     if [ "${inbox_write_rc:-0}" -ne 0 ]; then
       fm_lock_release "$INBOX_META_LOCK"

@@ -119,8 +119,10 @@ SH
 # window a record in FM_FAKE_STATE names except FM_FAKE_GONE_WINDOWS; the pane
 # command is zsh for FM_FAKE_SHELL_WINDOWS (an agent that died to its shell)
 # and claude otherwise; send-keys -l text (the doorbell) is logged to
-# FM_SEND_LOG; every capture-pane prints a fresh counter, so a watcher over it
-# never reads a stale pane and its only wakes are the ones a case asserts.
+# FM_SEND_LOG; with FM_FAKE_CAPTURE_COUNT set, every capture-pane prints a
+# fresh counter, so a watcher over it never reads a stale pane and its only
+# wakes are the ones a case asserts; without it the pane is an empty composer,
+# so a typed submit reads back as confirmed (tests/fm-send-led-channel.test.sh).
 make_fake_chain_tmux() {  # <fakebin>
   cat > "$1/tmux" <<'SH'
 #!/usr/bin/env bash
@@ -174,10 +176,11 @@ case "${1:-}" in
     [ "$literal" = 1 ] && printf '%s\n' "${1:-}" >> "${FM_SEND_LOG:-/dev/null}"
     exit 0 ;;
   capture-pane)
+    [ -n "${FM_FAKE_CAPTURE_COUNT:-}" ] || { printf '╭────╮\n│    │\n╰────╯\n'; exit 0; }
     n=0
-    [ ! -f "${FM_FAKE_CAPTURE_COUNT:-/nonexistent}" ] || n=$(cat "$FM_FAKE_CAPTURE_COUNT")
+    [ ! -f "$FM_FAKE_CAPTURE_COUNT" ] || n=$(cat "$FM_FAKE_CAPTURE_COUNT")
     n=$((n + 1))
-    [ -z "${FM_FAKE_CAPTURE_COUNT:-}" ] || printf '%s\n' "$n" > "$FM_FAKE_CAPTURE_COUNT"
+    printf '%s\n' "$n" > "$FM_FAKE_CAPTURE_COUNT"
     printf '╭────╮\n│ %s │\n╰────╯\n' "$n"
     exit 0 ;;
 esac

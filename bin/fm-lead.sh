@@ -14,7 +14,10 @@
 #   to stderr and exits 0.
 #   steer sends <crewmate> the text through bin/fm-send.sh exactly as First
 #   Mate would (the durable inbox record plus the doorbell; --resolve-key
-#   closes the door the text answers), then appends one line to the leader's
+#   closes the door the text answers), carrying fm-send's --from-leader mark
+#   (the led channel: to a led crewmate, only its leader's steer, a lifecycle
+#   action or the captain's words get through; the mark is recorded in the
+#   record's header), then appends one line to the leader's
 #   own state/<task-id>.status:
 #     note: steered <crewmate> (<chars> chars, <lines> lines): <first line>
 #   so First Mate reads every steer in its next UNREAD STATUS section without
@@ -199,7 +202,7 @@ EOF
     fi
     send_args=()
     for k in ${RESOLVE_KEYS[@]+"${RESOLVE_KEYS[@]}"}; do send_args+=(--resolve-key "$k"); done
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" ${send_args[@]+"${send_args[@]}"} "$TEXT"
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" --from-leader "$LEADER" ${send_args[@]+"${send_args[@]}"} "$TEXT"
     send_rc=$?
     [ "$send_rc" -eq 0 ] || exit "$send_rc"
     first=$(printf '%s\n' "$TEXT" | head -n 1)
@@ -217,7 +220,7 @@ EOF
     printf 'ordered\t%s\t%s\t%s\n' "$(date +%s)" "$LEADER" "${FOCUS:--}" >> "$TRIMS/index"
     if [ -n "$FOCUS" ]; then ORDER="/compact $FOCUS"; else ORDER="/compact"; fi
     send_rc=0
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" "$ORDER" || send_rc=$?
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" --from-leader "$LEADER" "$ORDER" || send_rc=$?
     case "$send_rc" in
       0) ;;
       3) echo "fm-lead: the trim order to $CREWMATE was typed but its submit is unconfirmed (fm-send exit 3); the order stands in the ledger - verify the pane before ordering again" >&2
