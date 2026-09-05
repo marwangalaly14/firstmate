@@ -64,6 +64,10 @@
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
 # over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
 # self-governance section when a touched project AGENTS.md lacks it.
+# Ship and scout scaffolds name the crewmate's logbook, data/<id>/logbook.md
+# (bin/fm-logbook-lib.sh owns the path and the template the spawn creates):
+# four headings the crewmate rewrites in place as a thinking aid. The section
+# asks for no number and the definition of done never mentions it.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -87,6 +91,8 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-logbook-lib.sh
+. "$SCRIPT_DIR/fm-logbook-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 
 resolve_directory_input() {
@@ -208,6 +214,18 @@ When a terminal message says an instruction is waiting there - and at any natura
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
 EOF
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
+
+# The crewmate's logbook (ship and scout; a charter has a whole home instead).
+# Four lines, no number asked: the file is for the crewmate's own thinking and
+# for whoever picks the task up, never a count for anyone.
+LOGBOOK_FILE=$(fm_logbook_path "$DATA" "$ID")
+IFS= read -r -d '' LOGBOOK_SECTION <<EOF || true
+# Your logbook
+Keep \`$LOGBOOK_FILE\` current at natural checkpoints under its four headings: Done, Next, Open, Decisions.
+Under 40 lines, rewritten in place; it already exists with the headings.
+It is for your own thinking and for whoever picks the task up after you; nobody reads it to count anything.
+EOF
+LOGBOOK_SECTION=${LOGBOOK_SECTION%$'\n'}
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -392,6 +410,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 
 $INBOX_SECTION
 
+$LOGBOOK_SECTION
+
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
@@ -473,6 +493,8 @@ $ASK_USER_BLOCK
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
 $INBOX_SECTION
+
+$LOGBOOK_SECTION
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.

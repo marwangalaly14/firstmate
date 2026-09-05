@@ -346,6 +346,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-lead-lib.sh"
 # shellcheck source=bin/fm-compact-lib.sh
 . "$SCRIPT_DIR/fm-compact-lib.sh"
+# shellcheck source=bin/fm-logbook-lib.sh
+. "$SCRIPT_DIR/fm-logbook-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -1964,6 +1966,9 @@ else
 fi
 [ -f "$BRIEF" ] || { echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2; exit 1; }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  # The crewmate's logbook, from bin/fm-logbook-lib.sh's template when absent; a
+  # relaunch keeps what the crewmate wrote. Leaders get the same file.
+  fm_logbook_init "$DATA" "$ID" || exit 1
   if fm_brief_task_placeholders_present "$BRIEF"; then
     echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
     exit 1
