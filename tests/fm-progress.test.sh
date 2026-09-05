@@ -197,38 +197,66 @@ EOF
   pass "the DONE section strikes only a hex word that mixes digits and a-f letters: a plain long number and an epoch survive word for word, a real commit id goes with its preposition and leaves no double space or stray parenthesis"
 }
 
-# An introducer word, an optional "(", the hash and its matching ")" go as one
-# unit; a parenthesised hash with no introducer loses the whole parenthetical.
-# Neither leaves a stray bracket, a doubled space or a space before a stop.
-test_a_parenthesised_hash_goes_with_its_introducer_as_one_unit() {
-  local done_lines expected
-  make_home parens
-  write_task "$HOME_DIR" lead-p "leads=1"
-  cat > "$DATA/lead-p/logbook.md" <<'EOF'
-# Logbook: lead-p
-
-## Done
-- The keep-set landed (7ea43a4).
-- The leader's hands, in (99e8821).
-- The keep-set landed 7ea43a4.
-- The card ships (7ea43a4) today.
-- Cut the crewmate's fresh head from 1560000 to 1400000 tokens.
-- The order at epoch 1757100000 was typed into the pane.
-EOF
-  run_progress scaffold lead-p --estimate 20
+# THE RULE for a struck commit id, asserted as an invariant over the whole
+# matrix rather than as a list of examples: the id, the brackets it emptied,
+# the separator that introduced it (a space, or a comma and a space) and the
+# introducer word it followed all go as ONE unit, and what is left is a
+# grammatical sentence - no doubled space, no space before a stop, no ",.",
+# no ",,", no empty "()", and no bracket without its partner.
+test_a_struck_commit_id_leaves_a_grammatical_sentence() {
+  local intro sep open close want got done_lines n bad
+  make_home strikerule
+  write_task "$HOME_DIR" lead-r "leads=1"
+  {
+    printf '# Logbook: lead-r\n\n## Done\n'
+    for intro in after in at as landed commit from to; do
+      for sep in ' ' ', '; do
+        for open in '' '('; do
+          if [ -n "$open" ]; then close=')'; else close=; fi
+          printf -- '- The leader %s%s%s7ea43a4%s and the crew read it.\n' "$intro" "$sep" "$open" "$close"
+        done
+      done
+    done
+    printf -- '- The keep-set landed, 7ea43a4.\n'
+    printf -- '- It landed, 7ea43a4.\n'
+    printf -- '- The keep-set landed (7ea43a4).\n'
+    printf -- '- The keep-set landed 7ea43a4.\n'
+    printf -- "- The leader's hands, in (99e8821).\n"
+    printf -- '- The card ships (7ea43a4) today.\n'
+    printf -- "- Cut the crewmate's fresh head from 1560000 to 1400000 tokens.\n"
+    printf -- '- The order at epoch 1757100000 was typed into the pane.\n'
+  } > "$DATA/lead-r/logbook.md"
+  run_progress scaffold lead-r --estimate 20
   [ "$RC" -eq 0 ] || fail "scaffold exits 0, got $RC: $ERR"
   done_lines=$(printf '%s\n' "$OUT" | sed -n 's/^- \[x\] //p')
-  expected="The keep-set.
-The leader's hands.
-The keep-set.
-The card ships today.
-Cut the crewmate's fresh head from 1560000 to 1400000 tokens.
-The order at epoch 1757100000 was typed into the pane."
-  [ "$done_lines" = "$expected" ] || fail "each DONE line reads as a whole sentence; wanted:"$'\n'"$expected"$'\n'"got:"$'\n'"$done_lines"
-  printf '%s\n' "$done_lines" | grep -q '[()]' && fail "no DONE line keeps a stray bracket:"$'\n'"$done_lines"
-  printf '%s\n' "$done_lines" | grep -q '  ' && fail "no DONE line keeps a doubled space:"$'\n'"$done_lines"
-  printf '%s\n' "$done_lines" | grep -q ' [.,;:)]' && fail "no DONE line keeps a space before punctuation:"$'\n'"$done_lines"
-  pass "an introducer word, its optional bracket, the commit id and the matching bracket go as one unit; a bare parenthesised id loses the whole parenthetical; an all-digit run is not a commit id and survives word for word"
+  # Every generated case reads as the same sentence with the citation gone.
+  n=0
+  for intro in after in at as landed commit from to; do
+    for sep in ' ' ', '; do
+      for open in '' '('; do
+        n=$((n + 1))
+        want="The leader and the crew read it."
+        got=$(printf '%s\n' "$done_lines" | sed -n "${n}p")
+        [ "$got" = "$want" ] || fail "an id struck after '$intro' with separator '$sep' and bracketing '${open:-none}' must read '$want', got '$got'"
+      done
+    done
+  done
+  assert_contains "$done_lines" "The keep-set." "'The keep-set landed, 7ea43a4.' and its bracketed and bare kin all read 'The keep-set.'"
+  [ "$(printf '%s\n' "$done_lines" | grep -c '^The keep-set\.$')" -eq 3 ] \
+    || fail "all three keep-set shapes (comma, bracket, bare) read 'The keep-set.', got:"$'\n'"$done_lines"
+  assert_contains "$done_lines" "It." "'It landed, 7ea43a4.' reads 'It.'"
+  assert_contains "$done_lines" "The leader's hands." "an introducer behind a comma goes with the citation"
+  assert_contains "$done_lines" "The card ships today." "a bracketed id with no introducer loses the whole parenthetical"
+  assert_contains "$done_lines" "Cut the crewmate's fresh head from 1560000 to 1400000 tokens." "an all-digit run is not a commit id"
+  assert_contains "$done_lines" "The order at epoch 1757100000 was typed into the pane." "nor is an epoch"
+  assert_not_contains "$done_lines" "7ea43a4" "no commit id survives"
+  assert_not_contains "$done_lines" "99e8821" "nor a bracketed one"
+  # The invariant, over every DONE line the report printed.
+  bad=$(printf '%s\n' "$done_lines" | grep -n -e '  ' -e ' [.,;:)]' -e ',\.' -e ',,' -e '()' || true)
+  [ -z "$bad" ] || fail "a struck line must read as a sentence - no doubled space, no space before a stop, no ',.' or ',,', no empty '()' - got:"$'\n'"$bad"
+  bad=$(printf '%s\n' "$done_lines" | awk '{ o = gsub(/\(/, "("); c = gsub(/\)/, ")"); if (o != c) print NR ": " $0 }')
+  [ -z "$bad" ] || fail "no bracket is left without its partner, got:"$'\n'"$bad"
+  pass "a struck commit id takes its brackets, its separator and its introducer with it across every introducer, separator and bracketing, leaving a grammatical sentence; an all-digit run is not a commit id and survives word for word"
 }
 
 test_fleet_rolls_the_leaders_bars_into_one() {
@@ -266,5 +294,5 @@ test_bar_renders_twenty_cells
 test_scaffold_carries_the_six_parts
 test_scaffold_without_inputs_says_what_is_missing
 test_only_a_mixed_hex_word_is_struck_from_done
-test_a_parenthesised_hash_goes_with_its_introducer_as_one_unit
+test_a_struck_commit_id_leaves_a_grammatical_sentence
 test_fleet_rolls_the_leaders_bars_into_one

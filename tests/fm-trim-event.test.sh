@@ -8,9 +8,12 @@
 # summary verbatim) and appends the ledger line. From the second automatic
 # trim on it puts one line into the leader's steering inbox through
 # bin/fm-send.sh when state/<id>.meta names a leader whose endpoint is alive,
-# and otherwise queues one `signal` wake for First Mate. A manual trim is
-# recorded and rings nobody; an unreadable payload does nothing. The spawn
-# installs the hook for every claude crewmate and leader, never for codex.
+# and otherwise queues one `signal` wake for First Mate. A manual trim rings
+# nobody, with one exception that is the point of the hook: a manual trim a
+# leader ordered (a pending `ordered` line in the ledger) sends the crewmate
+# its own carry-on nudge, so nothing has to wait for the compaction to end.
+# An unreadable payload does nothing. The spawn installs the hook for every
+# claude crewmate and leader, never for codex.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -241,6 +244,7 @@ test_manual_trim_records_and_rings_nobody() {
   [ ! -e "$home/send.log" ] || fail "a manual trim rings no doorbell"
   [ ! -e "$home/state/.wake-queue" ] || fail "a manual trim queues no wake"
   [ "$(sed -n '3p' "$home/data/c1/trims/index" | cut -f1,2,5)" = $'3\tmanual\t-' ] || fail "the ledger says manual and -"
+  [ ! -d "$home/state/c1.inbox" ] || fail "a crewmate that trimmed on its own is nudged by nobody:"$'\n'"$(ls "$home/state/c1.inbox")"
   # A leader's own record has no trim line and gets the same treatment.
   write_transcript "$home/lead.jsonl"
   run_hook "$home" lead-a "$(payload manual "$home/lead.jsonl")"
@@ -248,12 +252,12 @@ test_manual_trim_records_and_rings_nobody() {
   case "$(cat "$home/data/lead-a/trims/1.md")" in
     *"trim line"*) fail "a leader has no trim line to name" ;;
   esac
-  pass "a manual trim is recorded (count unchanged, told nobody) and rings neither the leader nor First Mate; a leader's record names no trim line"
+  pass "a manual trim nobody ordered is recorded (count unchanged, told nobody), rings neither the leader nor First Mate and nudges the crewmate not at all; a leader's record names no trim line"
 }
 
 # --- 3b. a manual trim after the leader's order is the leader's ---------------
 test_manual_trim_after_an_order_is_attributed() {
-  local home t idx lead_rc
+  local home t idx lead_rc msgs f
   make_home ordered; home=$HOME_DIR
   write_task "$home" lead-a "leads=1"
   write_task "$home" c1 "leader=lead-a"
@@ -261,14 +265,15 @@ test_manual_trim_after_an_order_is_attributed() {
   write_transcript "$t"
   run_hook "$home" c1 "$(payload auto "$t")"
   idx="$home/data/c1/trims/index"
-  # The real order: fm-lead trim writes the ordered line, then types /compact.
-  # The compaction has not run yet, so fm-lead's bounded wait times out (exit
-  # 3) and the order stands in the ledger for the hook below to be attributed to.
+  # The real order: fm-lead trim writes the ordered line, types /compact and
+  # RETURNS. By the time the hook below runs, that command is long gone - the
+  # shape this case exists for: nothing is waiting anywhere for the trim, and
+  # the carry-on nudge must still land.
   lead_rc=0
   env PATH="$FAKEBIN:$PATH" FM_HOME="$home" FM_SEND_LOG="$home/send.log" FM_FAKE_STATE="$home/state" FM_SEND_SETTLE=0 \
-    FM_LEAD_TRIM_WAIT_SECS=1 FM_LEAD_TRIM_POLL_SECS=1 \
     "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 the failing test >/dev/null 2>"$home/lead.err" || lead_rc=$?
-  [ "$lead_rc" -eq 3 ] || fail "the leader's trim order stands, unconfirmed (exit 3), got $lead_rc:"$'\n'"$(cat "$home/lead.err")"
+  [ "$lead_rc" -eq 0 ] || fail "the leader's trim order lands and returns without waiting, got $lead_rc:"$'\n'"$(cat "$home/lead.err")"
+  [ ! -d "$home/state/c1.inbox" ] || fail "fm-lead sends no nudge itself; the hook does"
   assert_contains "$(cat "$home/send.log")" "/compact the failing test" "the order is typed"
   [ "$(sed -n '2p' "$idx" | cut -f1,3,4)" = $'ordered\tlead-a\tthe failing test' ] || fail "the order line follows the first trim:"$'\n'"$(cat "$idx")"
   run_hook "$home" c1 "$(payload manual "$t" "Focused on the failing test.")"
@@ -277,13 +282,24 @@ test_manual_trim_after_an_order_is_attributed() {
   assert_contains "$(cat "$home/data/c1/trims/2.md")" "- ordered by: leader lead-a (order at epoch " "the record names the leader's order"
   assert_contains "$(cat "$home/data/c1/trims/2.md")" "focus: the failing test)" "the record carries the focus"
   assert_contains "$(cat "$home/data/c1/trims/2.md")" "- automatic trims so far: 1" "an ordered trim is manual: not counted"
-  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- told: nobody (manual trim)" "an ordered trim rings nobody: the leader ordered it"
-  [ "$(sed -n '3p' "$idx" | cut -f1,2,5,6)" = $'2\tmanual\t-\tordered:lead-a' ] || fail "the ledger line ends in ordered:<leader>:"$'\n'"$(cat "$idx")"
   [ ! -d "$home/state/lead-a.inbox" ] || fail "an ordered trim does not ring the leader"
-  # A manual trim with no pending order (the order was consumed) is nobody's.
+  # The carry-on nudge: the crewmate's own inbox, from the leader that ordered it.
+  [ -f "$home/state/c1.inbox/001.msg" ] || fail "the carry-on nudge is a durable record in the crewmate's own inbox; inbox:"$'\n'"$(ls "$home/state/c1.inbox" 2>/dev/null)"
+  [ "$(inbox_body "$home/state/c1.inbox/001.msg")" = 'trim done - continue: the failing test' ] \
+    || fail "the nudge names the order's focus, got: '$(inbox_body "$home/state/c1.inbox/001.msg")'"
+  assert_contains "$(sed '/^--$/,$d' "$home/state/c1.inbox/001.msg")" "mark=from-leader:lead-a" "the nudge carries the ordering leader's mark (the led channel)"
+  assert_contains "$(cat "$home/send.log")" "Firstmate instruction waiting" "the inbox doorbell rings the crewmate"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- told: c1 itself (carry-on steer from leader lead-a)" "the record names the nudge"
+  [ "$(sed -n '3p' "$idx" | cut -f1,2,5,6)" = $'2\tmanual\tcontinue:lead-a\tordered:lead-a' ] || fail "the ledger names the nudge and still ends in ordered:<leader>:"$'\n'"$(cat "$idx")"
+  # A manual trim with no pending order (the order was consumed) is nobody's,
+  # and is nudged by nobody: the order is one-shot.
   run_hook "$home" c1 "$(payload manual "$t" "Typed by hand.")"
   assert_contains "$(cat "$home/data/c1/trims/3.md")" "- ordered by: nobody in the ledger" "a manual trim without an order is not attributed"
-  [ "$(sed -n '4p' "$idx" | cut -f6)" = '' ] || fail "no sixth field without an order:"$'\n'"$(cat "$idx")"
+  assert_contains "$(cat "$home/data/c1/trims/3.md")" "- told: nobody (manual trim)" "and tells nobody"
+  [ "$(sed -n '4p' "$idx" | cut -f5,6)" = $'-' ] || fail "no nudge and no sixth field without an order:"$'\n'"$(cat "$idx")"
+  msgs=0
+  for f in "$home"/state/c1.inbox/*.msg; do [ -f "$f" ] && msgs=$((msgs + 1)); done
+  [ "$msgs" -eq 1 ] || fail "the consumed order nudges nothing a second time, got $msgs records"
   # An order that did not reach the pane (order-failed) attributes nothing.
   printf 'ordered\t%s\tlead-a\tlate\norder-failed\t%s\n' "$(date +%s)" "$(date +%s)" >> "$idx"
   run_hook "$home" c1 "$(payload manual "$t" "Typed by hand again.")"
@@ -295,7 +311,7 @@ test_manual_trim_after_an_order_is_attributed() {
   case "$(cat "$home/data/c1/trims/5.md")" in *"ordered by"*) fail "an automatic trim has no ordered-by line" ;; esac
   assert_contains "$(cat "$home/data/c1/trims/5.md")" "- automatic trims so far: 2" "order lines are never counted as trims"
   [ -f "$home/state/lead-a.inbox/001.msg" ] || fail "the second automatic trim still rings the leader"
-  pass "a manual trim after fm-lead's order is the leader's (record and ledger say so, not counted, rings nobody); a hand-typed or failed-order trim is nobody's; order lines never count"
+  pass "a manual trim after fm-lead's order is the leader's (record and ledger say so, not counted, rings the leader not at all) and carries the crewmate its carry-on nudge even though the ordering command is long gone; a hand-typed or failed-order trim is nobody's and is nudged by nobody; order lines never count"
 }
 
 # --- 4. no live leader: First Mate gets one signal wake -----------------------

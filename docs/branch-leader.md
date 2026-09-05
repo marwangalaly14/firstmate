@@ -8,7 +8,7 @@ Two words hold everywhere: the leader measures its crewmates from the outside an
 
 - A leader is spawned as one: `bin/fm-spawn.sh ... --leads` records `leads=1` and leaves the harness's own trim line in place, because the epic's whole shape lives in the leader's head.
 - A leader is briefed as one: `bin/fm-brief.sh <leader-id> <repo> --mode <mode> --leads` (or `--scout --leads`) adds "# You lead crewmates" after the doors, whose first sentence is "Read docs/branch-leader.md before your first steer", with this page's path.
-  That sentence is how a leader finds this page: no other brief and no always-loaded rulebook names it, and a `--leads` spawn whose brief lacks it is launched with a warning, never refused.
+  That sentence is how a leader finds this page: no other generated brief names it, and a `--leads` spawn whose brief lacks it is launched with a warning, never refused.
 - Its crewmates are spawned under it: `bin/fm-spawn.sh ... --leader <leader-id>` records `leader=<leader-id>` in each crewmate's task record ([`bin/fm-lead-lib.sh`](../bin/fm-lead-lib.sh) owns the chain).
   The chain is one level deep: a led crewmate cannot lead, and a leader takes four crewmates at once; the spawn refuses a fifth, naming the four.
 - Each crewmate's brief is scaffolded with the same leader: `bin/fm-brief.sh <id> <repo> --mode <mode> --leader <leader-id>` names the leader as the one who answers the crewmate's doors, and the spawn refuses a brief and a `--leader` that disagree ([`bin/fm-brief.sh`](../bin/fm-brief.sh) header).
@@ -62,9 +62,8 @@ Read that record against the story's acceptance criteria.
 - If it is not, steer once: restate the goal in one line, pin what matters, name what to drop.
 - If the crewmate's head is heavy with what it no longer needs, order a trim with a focus: `FM_HOME=<home> bin/fm-lead.sh trim --leader <leader-id> <crewmate-id> <what to keep>`.
   The order is written into the crewmate's trim ledger first, then `/compact <focus>` is typed into its pane; a crewmate that is mid-turn queues the typed order and trims at its next turn boundary (measured live on 2.1.259: typed 8 s into a 49 s turn, queued on screen, run 10 ms after the turn ended), so an order is never an interrupt.
-  The trim that follows is recorded as the leader's (`- ordered by: leader <id>`) and rings nobody.
-  The command finishes the loop itself, so a trim never leaves a crewmate idle at its prompt: it waits (up to `FM_LEAD_TRIM_WAIT_SECS`, 600 s) for the crewmate's own trim line in that ledger, then sends `trim done - continue: <focus>` through the inbox doorbell - an append, so [the law of the head](#the-law-of-the-head) holds.
-  If no trim arrives within the bound, the command says so and exits 3: the order stands in the ledger, `note: trim of <id> unconfirmed after <N>s` goes on your status, and it is yours to read the pane (`bin/fm-crew-vitals.sh <id>`) and steer by hand.
+  The trim that follows is recorded as the leader's (`- ordered by: leader <id>`) and rings nobody, but the crewmate itself is nudged: its own trim hook sends `trim done - continue: <focus>` into its inbox when the compaction ends.
+  The command does not wait for any of that: it marks the order, types `/compact`, and returns, so nothing you run has to outlive a compaction for the crewmate to be told to carry on. The nudge is an append, so [the law of the head](#the-law-of-the-head) holds.
 - If the story is two stories, write the split note for First Mate in your logbook and status.
 - If the crewmate cannot be steered back, write the handover note from its logbook; First Mate relaunches, because a relaunch is irreversible and the leader never performs one.
 

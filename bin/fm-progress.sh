@@ -98,27 +98,35 @@ section_lines() {  # <file> <name>
   ' "$1"
 }
 
-# A commit id is not news: strike "(abc1234)", "(abc1234, def5678)" and a bare
-# hash word out of a line that names what changed for a person, with the
-# introducer word that brought it in. A word is a commit id only when it is
-# made of [0-9a-f], is 7 to 40 characters long, AND mixes at least one digit
-# with at least one a-f letter - a plain long number ("epoch 1757100000",
-# "1400000 tokens") and an all-letter word ("effaced") are words, not hashes.
-# The honest cost: an all-digit or all-letter hash is not struck, which is
-# rare and harmless, because this is a report and never a gate.
+# A commit id is not news: strike it out of a line that names what changed for
+# a person. A word is a commit id only when it is made of [0-9a-f], is 7 to 40
+# characters long, AND mixes at least one digit with at least one a-f letter -
+# a plain long number ("epoch 1757100000", "1400000 tokens") and an all-letter
+# word ("effaced") are words, not hashes. The honest cost: an all-digit or
+# all-letter hash is not struck, which is rare and harmless, because this is a
+# report and never a gate.
 #
-# The rule, settled: an introducer word from the set
-# (after|in|at|as|landed|commit|from|to), an optional opening parenthesis, the
-# commit id and its matching closing parenthesis go as ONE unit, so "landed
-# (7ea43a4)." leaves "." and never a stray bracket; a comma or space stranded
-# in front of the introducer goes with it ("hands, in (99e8821)." -> "hands.").
-# A parenthesised id with no introducer loses the whole parenthetical, both
-# brackets included ("ships (7ea43a4) today" -> "ships today"). The awk pass
-# leaves the brackets it emptied in place and the sed that follows removes the
-# empty parenthetical, collapses doubled spaces and drops a space before
-# . , ; : ) - which is why the "(" must survive the introducer's removal.
-# The predicate needs a look at the whole token, which portable ERE cannot
-# express, so the strike is an awk pass.
+# THE RULE. Removing a commit id removes, as one unit:
+#   - the id itself;
+#   - any brackets that wrapped it and are left empty;
+#   - the separator that directly introduced it (a space, or a comma and a
+#     space);
+#   - and the introducer word - after, in, at, as, landed, commit, from, to -
+#     when the id followed it through nothing but those separators and
+#     brackets.
+# What remains must be a grammatical sentence: no doubled space, no space
+# before . , ; : or ), no ",." and no ",,", no empty "()", and no bracket left
+# without its partner. tests/fm-progress.test.sh asserts that as an invariant
+# over every introducer, separator and bracketing, not as a list of examples.
+#
+# How it is done: the awk pass drops the id, the separator and the introducer,
+# and leaves the brackets it emptied where they stood so they still meet their
+# partners; the sed that follows removes the empty parenthetical, collapses
+# doubled spaces and drops a space before a stop. A separator made of anything
+# but spaces, commas and brackets is not a separator this rule knows, so the
+# id alone goes and the text around it is left untouched. The commit-id
+# predicate needs a look at the whole token, which portable ERE cannot
+# express, which is why the strike is an awk pass at all.
 strike_commit_ids() {
   awk '
     function is_commit(t) {
@@ -134,22 +142,23 @@ strike_commit_ids() {
         if (length(pre) > 0) prev = substr(pre, length(pre), 1)
         else if (length(out) > 0) prev = substr(out, length(out), 1)
         else prev = ""
-        # A hash is struck only where sed struck one: at the start of the line
-        # or after a space, "(" or ",", never inside a longer word.
+        # A hash is struck only where the text lets one stand: at the start of
+        # the line or after a space, "(" or ",", never inside a longer word.
         if (is_commit(tok) && (prev == "" || prev == " " || prev == "(" || prev == ",")) {
           kept = out pre
-          # The separator the hash sat behind - " ", "(", " (" - is kept
-          # exactly as it was, so an opening bracket still meets its closing
-          # one; only the introducer word in front of it is taken away.
           tail = kept
           sub(/^.*[0-9A-Za-z]/, "", tail)
           head = substr(kept, 1, length(kept) - length(tail))
-          word = head
-          sub(/^.*[^0-9A-Za-z]/, "", word)
-          if (word ~ /^(after|in|at|as|landed|commit|from|to)$/) {
-            sub(/[0-9A-Za-z]+$/, "", head)
-            sub(/[ ,]+$/, "", head)
-            out = head tail
+          if (tail ~ /^[ ,()]*$/) {
+            brackets = tail
+            gsub(/[^()]/, "", brackets)
+            word = head
+            sub(/^.*[^0-9A-Za-z]/, "", word)
+            if (word ~ /^(after|in|at|as|landed|commit|from|to)$/) {
+              sub(/[0-9A-Za-z]+$/, "", head)
+              sub(/[ ,]+$/, "", head)
+            }
+            out = head (head == "" ? "" : " ") brackets
           } else {
             out = kept
           }
@@ -164,6 +173,7 @@ strike_commit_ids() {
     -e 's/\( *, */(/g' \
     -e 's/ +([.,;:)])/\1/g' \
     -e 's/  +/ /g' \
+    -e 's/^ +//' \
     -e 's/ +$//'
 }
 

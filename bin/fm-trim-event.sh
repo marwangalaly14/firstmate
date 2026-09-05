@@ -27,8 +27,9 @@
 #     data/<task-id>/trims/index    one line per trim, appended last:
 #                                   <n> <trigger> <epoch> <head|?> <told> [ordered:<leader>]
 #                                   (tab-separated; told is leader:<id>,
-#                                   firstmate, or -; the sixth field marks a
-#                                   manual trim the leader ordered).
+#                                   firstmate, continue:<leader>, or -; the
+#                                   sixth field marks a manual trim the leader
+#                                   ordered).
 #   The index also carries the leader's orders, written by bin/fm-lead.sh
 #   trim before it types /compact: `ordered <epoch> <leader> <focus|->`, and
 #   `order-failed <epoch>` when the /compact provably did not reach the pane.
@@ -37,6 +38,19 @@
 #   its index line ends in ordered:<leader>; any other manual trim says
 #   `- ordered by: nobody in the ledger`. Order lines are never counted as
 #   trims.
+#
+#   The carry-on nudge, on a manual trim the leader ordered and on no other
+#   trim: this hook fires only once the compaction has finished, and the
+#   pending order names who asked for it, so the nudge is sent from here and
+#   nothing anywhere has to wait for the trim to end. One line goes into the
+#   crewmate's OWN steering inbox through bin/fm-send.sh, marked from the
+#   leader that ordered it - `trim done - continue: <focus>`, or `trim done -
+#   continue with your task card` when the order carried no focus. That is an
+#   append at a trim, so the law of the head holds. The pending order is
+#   one-shot: this trim's own ledger line clears it, so a later /compact the
+#   crewmate types itself is recorded and never nudged. A send that does not
+#   record fails nothing: the hook still exits 0 and prints nothing, and the
+#   told field says so, exactly as a failed tell does.
 #   <n> counts every trim of the task, manual ones included. The automatic
 #   count N is 1 + max(automatic lines already in the index, earlier automatic
 #   compact_boundary rows in the transcript), so a ledger that missed a trim
@@ -65,8 +79,10 @@
 #   stdout and exits 0: a failing hook would show up as a hook error in the
 #   crewmate's session, which is not the crewmate's concern. Only a missing
 #   argument (running it by hand) is refused with usage.
-# Reads: the payload on stdin (jq), the transcript it names, state/<id>.meta.
-# Writes: data/<task-id>/trims/; the leader's inbox or the wake queue.
+# Reads: the payload on stdin (jq), the transcript it names, state/<id>.meta,
+# data/<task-id>/trims/index.
+# Writes: data/<task-id>/trims/; the leader's inbox or the wake queue; the
+# crewmate's own inbox, for the carry-on nudge after a leader-ordered trim.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -281,6 +297,20 @@ if [ "$TRIGGER" = auto ] && [ "$N_AUTO" -ge 2 ]; then
       fm_wake_append signal "trim:$ID" "$line ($why)"
     ) >/dev/null 2>&1 && { TOLD=firstmate; TOLD_LINE="First Mate (signal wake; $why)"; } \
       || TOLD_LINE="nobody ($why; the wake could not be queued)"
+  fi
+fi
+
+if [ "$TRIGGER" = manual ] && [ -n "$ORDER_LEADER" ]; then
+  case "$ORDER_FOCUS" in
+    ''|-) CONTINUE='trim done - continue with your task card' ;;
+    *) CONTINUE="trim done - continue: $ORDER_FOCUS" ;;
+  esac
+  # shellcheck disable=SC2031  # FM_HOME is this script's own argument, never a subshell's
+  if FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$ID" --from-leader "$ORDER_LEADER" "$CONTINUE" >/dev/null 2>&1; then
+    TOLD="continue:$ORDER_LEADER"
+    TOLD_LINE="$ID itself (carry-on steer from leader $ORDER_LEADER)"
+  else
+    TOLD_LINE="nobody (the carry-on steer from leader $ORDER_LEADER did not reach $ID)"
   fi
 fi
 

@@ -230,12 +230,11 @@ test_the_machinery_writes_only_under_data_and_state() {
   machinery "$ROOT/bin/fm-progress.sh" scaffold lead-a --estimate 40 > "$BASE/out/progress" 2>&1 || fail "the progress scaffold runs: $(cat "$BASE/out/progress")"
   # the leader's hands
   machinery "$ROOT/bin/fm-lead.sh" steer --leader lead-a c1 "drop the retry loop; assert once" > "$BASE/out/steer" 2>&1 || fail "the leader's steer lands: $(cat "$BASE/out/steer")"
-  # No compaction runs here, so the bounded wait times out (exit 3); what this
-  # case weighs is where the order wrote, not whether the crewmate answered it.
+  # What this case weighs is where the order wrote, not whether the crewmate
+  # answered it; the command marks, types and returns.
   trim_rc=0
-  FM_LEAD_TRIM_WAIT_SECS=1 FM_LEAD_TRIM_POLL_SECS=1 \
-    machinery "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 the failing test > "$BASE/out/trim" 2>&1 || trim_rc=$?
-  [ "$trim_rc" -eq 3 ] || fail "the leader's trim order lands, unconfirmed (exit 3), got $trim_rc: $(cat "$BASE/out/trim")"
+  machinery "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 the failing test > "$BASE/out/trim" 2>&1 || trim_rc=$?
+  [ "$trim_rc" -eq 0 ] || fail "the leader's trim order lands, got $trim_rc: $(cat "$BASE/out/trim")"
   # the door relay (the Stop hook's second half) and the trim-time scripts
   machinery "$ROOT/bin/fm-lead-relay.sh" "$HOME_DIR" c1 > "$BASE/out/relay" 2>&1 || fail "the relay runs"
   [ -f "$HOME_DIR/data/c1/doors/index" ] || fail "the relay did real work (the door ledger)"

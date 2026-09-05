@@ -85,9 +85,10 @@
 # --leads scaffolds a branch leader's brief: right after the doors it appends
 # "# You lead crewmates", whose first sentence is "Read docs/branch-leader.md
 # before your first steer", with the playbook's absolute path and what leading
-# is. That section is the only place the playbook is named: a brief without
-# --leads never mentions it, and neither does AGENTS.md, so the playbook is
-# read by the one crewmate whose job it is. Refused with --leader (a chain is
+# is. That section is the only place a generated brief names the playbook: a
+# brief without --leads, led or not, and a secondmate charter never mention it
+# (tests/fm-brief-doors.test.sh proves both over the scaffolded briefs), so
+# the playbook reaches the one crewmate whose job it is. Refused with --leader (a chain is
 # one level deep) and on a secondmate charter. The spawn's --leads records the
 # role; bin/fm-spawn.sh warns, never refuses, when a --leads spawn's brief
 # lacks the sentence.
@@ -329,10 +330,12 @@ DOORS_SECTION=${DOORS_SECTION%$'\n'}
 # A branch leader's section (--leads), appended right after the doors: a
 # leader is a crewmate too, with the same doors upward, and then the one
 # thing it must do before it steers anyone. The playbook,
-# docs/branch-leader.md, is named here and nowhere else a brief or the
-# always-loaded rulebook could reach it (tests/fm-brief-doors.test.sh keeps
-# it that way), and the sentence "Read docs/branch-leader.md before your
-# first steer" is what bin/fm-spawn.sh looks for on a --leads spawn.
+# docs/branch-leader.md, is named here and in no other brief this script
+# scaffolds (tests/fm-brief-doors.test.sh keeps that much, over the generated
+# briefs themselves); the always-loaded rulebook's own wording is a convention
+# nothing here asserts, because a document's text is not behaviour. The
+# sentence "Read docs/branch-leader.md before your first steer" is what
+# bin/fm-spawn.sh looks for on a --leads spawn.
 if [ "$LEADS" -eq 1 ]; then
   IFS= read -r -d '' LEADS_SECTION <<EOF || true
 # You lead crewmates

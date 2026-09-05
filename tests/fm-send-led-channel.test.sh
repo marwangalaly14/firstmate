@@ -212,8 +212,8 @@ test_fm_lead_steer_and_trim_carry_the_mark() {
   run_lead "$home" -- steer --leader lead-a c1 "rebase onto main first"
   [ "$RC" -eq 0 ] || fail "fm-lead steer to an own live crewmate lands: $ERR"
   assert_contains "$(record_header "$home/state/c1.inbox/001.msg")" "mark=from-leader:lead-a" "the steer's record carries the leader's mark"
-  FM_LEAD_TRIM_WAIT_SECS=1 FM_LEAD_TRIM_POLL_SECS=1 run_lead "$home" -- trim --leader lead-a c1 the failing test
-  [ "$RC" -eq 3 ] || fail "fm-lead trim types its order and waits for the crewmate's trim (exit 3 unconfirmed here): $RC $ERR"
+  run_lead "$home" -- trim --leader lead-a c1 the failing test
+  [ "$RC" -eq 0 ] || fail "fm-lead trim types its order and returns without waiting: $RC $ERR"
   assert_contains "$(cat "$home/send.log")" "/compact the failing test" "the trim order is typed"
   pass "fm-lead steer records mark=from-leader:<leader>; fm-lead trim types its order through the same mark"
 }
