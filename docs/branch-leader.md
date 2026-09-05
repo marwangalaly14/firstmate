@@ -94,6 +94,29 @@ Over 1,200 characters it warns and sends anyway.
 `FM_HOME` must be explicit, so a steer never resolves against another home.
 Report your own progress to First Mate as status lines, as any crewmate does; a `note:` line reaches First Mate's next unread-status section without waking it, which is how First Mate sees every steer.
 
+## The progress report
+
+Every epic branch leader reports progress in one shape, stewarded on its branch as a rule (the captain's words, 2026-09-05):
+
+- one line naming the goal the epic was given, in the captain's words;
+- a progress bar in a code block, twenty cells, with the estimate as a percentage, weighted by what is left, never by story count;
+- DONE - checkboxes ticked, one line each, written as what changed for a person, no commit ids;
+- IN FLIGHT - unticked, one line each, with the next step and who holds it;
+- QUEUED, FILED BY NAME - unticked, grouped, none started;
+- one closing paragraph, "What the bar means": what the epic can do today and what the missing part buys.
+
+Write it from your own logbook and the vitals, never from the crewmates' words.
+The scaffold fills what it can read and leaves the rest to you:
+
+```sh
+FM_HOME=<home> bin/fm-progress.sh scaffold <leader-id> --estimate <pct> > data/<leader-id>/progress.md
+```
+
+It takes the goal from your brief's Captain's intent, the DONE lines from your logbook's `## Done` with commit ids struck out, the IN FLIGHT lines from your `## Next` (held by you) and from each crewmate's card (held by that crewmate, with its head, last commit and status word, the next step left for you), and placeholders for the queued names and the closing paragraph ([`bin/fm-progress.sh`](../bin/fm-progress.sh)).
+The estimate is yours: what is done, weighted by what is left.
+Keep the saved report at `data/<leader-id>/progress.md`; First Mate rolls every leader's bar into one fleet bar for the captain the same way, with `bin/fm-progress.sh fleet`.
+It is a report, never a gate: nothing reads the bar to stop, score or rank anyone.
+
 ## What the leader never does
 
 - Never tells a crewmate about the machinery that measures it: no trim counts, no head sizes, no budgets in a brief or a steer.
