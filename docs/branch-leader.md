@@ -65,6 +65,21 @@ Read that record against the story's acceptance criteria.
 After every trim the crewmate itself is handed its task card by its harness, read from disk: its brief's intent and definition of done, its logbook, the instructions waiting in its inbox, and its last status line ([`bin/fm-task-card.sh`](../bin/fm-task-card.sh)).
 A steer that sits in the inbox at that moment is on the card.
 
+## On a signal
+
+Every five minutes the watcher reads each of your crewmates' cards and rings you, once per episode, when the transcript shows one of three shapes ([`bin/fm-crew-signals.sh`](../bin/fm-crew-signals.sh)):
+
+- `signal: <id> stall: busy with nothing new for 17m (bound 15m); last call Bash \`...\`` - a tool call in flight, or a prompt the model has not answered, with nothing written for `FM_STUCK_CALL_SECS` (900): stuck in one call or wedged.
+- `signal: <id> loop: loop 3x Bash \`bash tests/x.test.sh\` in the last 30 calls` - the same command three or more times in the last 30 calls, the same file read five or more times, or an A-B-A-B bounce.
+- `signal: <id> drift?: 46K tokens since the last commit (82m) with no logbook change over that spend (bound 40K; logbook untouched)` - `FM_DRIFT_TOKENS` (40,000) spent since the last commit while the logbook did not change. A candidate, never a verdict: the question mark is deliberate.
+
+The ring carries the crewmate's card and the steer command.
+It is mechanical, from the transcript and nowhere else: nothing the crewmate writes, says or reports enters it, so a logbook that claims progress does not quiet a loop the transcript shows.
+Read the pane and the logbook against the story's acceptance criteria, then steer once if the work is off, or do nothing if it is sound; a foreground test run that legitimately takes twenty minutes rings a stall once and needs no answer.
+Each episode rings once (the ledger is `data/<id>/signals/index`); the same loop growing, or the same stall lengthening, stays silent, and a new shape rings again.
+First Mate is not told about signals; a dead leader's crewmate signals go nowhere (one failed row), and First Mate learns of the dead leader through its own liveness reads.
+The crewmate's own `stuck` door is a separate, human-shaped knock; the signals work whether or not it ever knocks.
+
 ## Steers
 
 Steers are short; the crewmate reads each once, and the leader is measured on their size, never refused.

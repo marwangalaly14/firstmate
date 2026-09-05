@@ -302,27 +302,26 @@ test_watcher_rings_from_its_poll_and_stays_quiet() {
   plant_loop c1
   WOUT="$HOME_DIR/watch.out"
   : > "$WOUT"
+  # A cadence longer than the case: the first poll checks, no later poll may.
   env "${CASE_ENV[@]}" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    FM_STALE_ESCALATE_SECS=999 FM_SIGNAL_CHECK_SECS=2 "$WATCH" > "$WOUT" 2> "$HOME_DIR/watch.err" &
+    FM_STALE_ESCALATE_SECS=999 FM_SIGNAL_CHECK_SECS=999999 "$WATCH" > "$WOUT" 2> "$HOME_DIR/watch.err" &
   WPID=$!
   i=0
   until [ "$(ledger_count c1)" -ge 1 ] || [ "$i" -ge 40 ]; do sleep 0.25; i=$((i + 1)); done
   [ "$(ledger_rows c1)" = "loop rung" ] || { kill "$WPID" 2>/dev/null; fail "the watcher's poll rings a led crewmate's loop, ledger: $(ledger_rows c1); err: $(tail -5 "$HOME_DIR/watch.err")"; }
   [ "$(inbox_count lead-a)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "the leader was rung once from the poll"; }
   assert_grep "signal check c1: loop	rung	loop 3x Bash bash tests/x.test.sh" "$STATE/.watch-triage.log" "the triage log carries the verdict"
-  # Two more cadences later: the same episode, no second ring, no wake.
+  # Five polls later: no wake, no second ring, and no second check either
+  # (the cadence, not the poll, decides when the transcript is read again).
   sleep 5
   kill -0 "$WPID" 2>/dev/null || fail "the watcher is still running (no wake for a signal), out: $(cat "$WOUT")"
-  [ "$(ledger_count c1)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "the same episode is checked again but not rung again, ledger: $(ledger_rows c1)"; }
+  [ "$(ledger_count c1)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "no second ring, ledger: $(ledger_rows c1)"; }
   [ "$(inbox_count lead-a)" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "still one record"; }
   [ "$(queue_records)" -eq 0 ] || { kill "$WPID" 2>/dev/null; fail "First Mate is not woken for a signal, queue: $(cat "$STATE/.wake-queue")"; }
   [ ! -e "$DATA/u1/signals" ] || { kill "$WPID" 2>/dev/null; fail "the poll checks led crewmates only"; }
-  [ "$(grep -c 'signal check c1: loop	silent' "$STATE/.watch-triage.log")" -ge 1 ] || { kill "$WPID" 2>/dev/null; fail "the later checks log the silent verdict"; }
-  # The cadence: one check per FM_SIGNAL_CHECK_SECS, not one per poll (a
-  # one-second poll over these seven-odd seconds would log seven or more).
-  [ "$(grep -c 'signal check c1:' "$STATE/.watch-triage.log")" -le 5 ] || { kill "$WPID" 2>/dev/null; fail "the check runs once per cadence, not per poll: $(grep -c 'signal check c1:' "$STATE/.watch-triage.log") checks"; }
+  [ "$(grep -c 'signal check c1:' "$STATE/.watch-triage.log")" -eq 1 ] || { kill "$WPID" 2>/dev/null; fail "the check runs once per cadence, not once per poll: $(grep -c 'signal check c1:' "$STATE/.watch-triage.log") checks in the log"; }
   kill "$WPID" 2>/dev/null || true; wait "$WPID" 2>/dev/null || true
-  pass "the watcher's poll runs the check for led crewmates only, on its cadence, rings the loop once, logs every verdict, and never wakes First Mate"
+  pass "the watcher's poll runs the check for led crewmates only, once per cadence, rings the loop once, logs the verdict, and never wakes First Mate"
 }
 
 # --- 9. a dead leader gets one failed row and no send -----------------------
