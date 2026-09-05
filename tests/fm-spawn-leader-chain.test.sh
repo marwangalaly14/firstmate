@@ -192,6 +192,53 @@ test_leader_equals_form_and_no_flag_leaves_meta_without_leader() {
   pass "--leader=<id> works and a spawn without the flag records no leader"
 }
 
+# The brief's doors name who answers the crewmate (fm-brief.sh --leader). A
+# spawn whose --leader disagrees with the brief is refused before any record,
+# like a delivery-mode mismatch; a brief that names nobody is launched as given.
+test_brief_and_spawn_must_agree_on_the_leader() {
+  local rec out status
+  rec=$(make_home agree)
+  read_home "$rec"
+  write_leader "$HOME_DIR" "$PROJ_DIR" lead-a
+  write_leader "$HOME_DIR" "$PROJ_DIR" lead-b
+  # write_brief runs inside run_spawn; the doors lines are appended by a wrapper
+  brief_with() {  # <id> <line>
+    mkdir -p "$HOME_DIR/data/$1"
+    printf '# Task\n## Captain'"'"'s intent\nAgree on the leader for %s.\n\n## Firstmate spec\nNone.\n\n# Your story, and the two times you speak up\n%s\n' "$1" "$2" > "$HOME_DIR/data/$1/brief.md"
+  }
+  spawn_keep_brief() {  # <id> [args...]: run_spawn without rewriting the brief
+    local id=$1 wt
+    shift
+    wt="$PROJ_DIR.wt-$id"
+    git -C "$PROJ_DIR" worktree add --quiet -b "wt-$id" "$wt"
+    env FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" HOME="$HOME_DIR/user-home" CLAUDE_CONFIG_DIR='' \
+      FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+      FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" PATH="$FAKEBIN_DIR:$PATH" \
+      "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off "$@" 2>&1
+  }
+  # shellcheck disable=SC2016  # the backticks are the brief's own Markdown
+  brief_with c1 'Your leader, `lead-a`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain'"'"'s words.'
+  out=$(spawn_keep_brief c1 --leader lead-b); status=$?
+  [ "$status" -ne 0 ] || fail "a brief naming lead-a spawned under lead-b must be refused"
+  assert_contains "$out" "leader mismatch for c1: the brief names leader lead-a but this spawn passed --leader lead-b" "the refusal names both leaders"
+  [ ! -e "$HOME_DIR/state/c1.meta" ] || fail "a refused spawn leaves no record"
+  out=$(spawn_keep_brief c1 --leader lead-a); status=$?
+  [ "$status" -eq 0 ] || fail "the same brief spawned under lead-a must succeed (exit $status)"$'\n'"$out"
+  # shellcheck disable=SC2016  # the backticks are the brief's own Markdown
+  brief_with c2 'Your leader, `lead-a`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain'"'"'s words.'
+  out=$(spawn_keep_brief c2); status=$?
+  [ "$status" -ne 0 ] || fail "a brief naming a leader spawned with no --leader must be refused"
+  assert_contains "$out" "the brief names leader lead-a but this spawn passed no --leader" "the refusal says the flag is missing"
+  brief_with c3 'First Mate answers in your inbox.'
+  out=$(spawn_keep_brief c3 --leader lead-a); status=$?
+  [ "$status" -ne 0 ] || fail "a brief saying First Mate answers spawned under a leader must be refused"
+  assert_contains "$out" "the brief says First Mate answers its doors but this spawn passed --leader lead-a" "the refusal names the brief's answerer"
+  out=$(spawn_keep_brief c3); status=$?
+  [ "$status" -eq 0 ] || fail "the same brief spawned with no leader must succeed (exit $status)"$'\n'"$out"
+  pass "the brief's doors and the spawn's --leader must agree: a different leader, a missing flag, or First Mate named under a leader is refused before any record; a brief naming nobody launches as given"
+}
+
 test_bad_leader_values_are_refused_before_any_record() {
   local rec out status
   rec=$(make_home refuse)
@@ -341,6 +388,7 @@ test_lead_crew_lists_a_leaders_crewmates() {
 
 test_leader_flag_records_leader_and_reports_it
 test_leader_equals_form_and_no_flag_leaves_meta_without_leader
+test_brief_and_spawn_must_agree_on_the_leader
 test_bad_leader_values_are_refused_before_any_record
 test_leader_is_refused_with_secondmate_and_relaunch
 test_fifth_crewmate_is_refused_until_one_is_torn_down

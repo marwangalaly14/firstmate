@@ -12,8 +12,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--leader <task-id>]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--leader <task-id>]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -68,6 +68,24 @@
 # (bin/fm-logbook-lib.sh owns the path and the template the spawn creates):
 # four headings the crewmate rewrites in place as a thinking aid. The section
 # asks for no number and the definition of done never mentions it.
+# Ship and scout scaffolds open by naming the crewmate's own id and this
+# brief's path, and carry, right after the Task section, the crewmate's two
+# doors upward ("# Your story, and the two times you speak up"): the
+# story-size pushback before beginning (`needs-decision: [key=story-size]`)
+# and the stuck door (`blocked: [key=stuck]`), both keyed status lines that
+# whoever answers closes with fm-send --resolve-key. --leader <task-id> names
+# the leader as the one who answers (in the doors, rule 5, rule 6 and the
+# inbox section); it accepts only a task recorded with leads=1 in this
+# home's state (bin/fm-spawn.sh --leads), and bin/fm-spawn.sh refuses a
+# spawn whose --leader disagrees with the brief. Without --leader, First
+# Mate answers. A secondmate charter takes no --leader.
+# They also carry the crewmate contract paragraph ("# Crewmate contract"):
+# report to your leader or First Mate, never the captain; on a project that
+# runs the loop, land in its order (session, push, preview, reading, the
+# ready line, STOP before stage); never run release, gc --prune or
+# gc --abandon on the session's own judgement. Nothing in a generated brief
+# names the machinery that measures the crewmate from outside
+# (tests/fm-brief-doors.test.sh keeps it that way).
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -124,6 +142,8 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+LEADER=
+LEADER_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -133,6 +153,7 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      leader) LEADER=$a; LEADER_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -145,6 +166,8 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --leader) want_value=leader ;;
+    --leader=*) LEADER=${a#--leader=}; LEADER_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -184,6 +207,27 @@ if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   exit 1
 fi
 
+# The chain: a led crewmate's brief names its leader as the one who answers
+# its doors. Only a task recorded with leads=1 (bin/fm-spawn.sh --leads) may
+# be named, the same test the spawn's --leader applies, so a brief and the
+# record it will get cannot disagree about who leads.
+if [ "$LEADER_SET" -eq 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --leader applies only to crewmate ship or scout briefs; a second mate answers to the main firstmate" >&2
+    exit 1
+  fi
+  [ -n "$LEADER" ] || { echo "error: --leader requires a task id" >&2; exit 1; }
+  LEADER_META="$STATE/$LEADER.meta"
+  if [ ! -f "$LEADER_META" ]; then
+    echo "error: leader $LEADER has no record in this home ($LEADER_META); spawn the leader with --leads before briefing its crewmates" >&2
+    exit 1
+  fi
+  if ! grep -q -x 'leads=1' "$LEADER_META"; then
+    echo "error: $LEADER was not spawned as a leader (--leads); a crewmate's leader must be recorded with leads=1" >&2
+    exit 1
+  fi
+fi
+
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"
@@ -202,6 +246,21 @@ shell_quote() {
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 
+# Who answers the crewmate: its leader when it has one, First Mate otherwise.
+# While a leader exists, First Mate's channel to a working crewmate carries
+# lifecycle and the captain's words only (AGENTS.md; the epic's principle 12).
+if [ "$LEADER_SET" -eq 1 ]; then
+  DOORS_ANSWER="Your leader, \`$LEADER\`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain's words."
+  HELPER="your leader will help"
+  REPLIER="Your leader will reply with the decision"
+  STEERER="Your leader (\`$LEADER\`) and firstmate steer you"
+else
+  DOORS_ANSWER="First Mate answers in your inbox."
+  HELPER="firstmate will help"
+  REPLIER="Firstmate will reply with the decision"
+  STEERER="Firstmate steers you"
+fi
+
 # The receive-and-ack half of the steering-inbox contract, included in every
 # scaffold kind. The record format, doorbell line, and re-ring ladder are
 # owned by bin/fm-task-inbox-lib.sh; the doorbell itself is self-describing,
@@ -209,7 +268,7 @@ INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 # only carrier of the instruction.
 IFS= read -r -d '' INBOX_SECTION <<EOF || true
 # Firstmate instruction inbox
-Firstmate steers you through durable message files in $INBOX_DIR.
+$STEERER through durable message files in $INBOX_DIR.
 When a terminal message says an instruction is waiting there - and at any natural checkpoint when you are unsure - list $INBOX_DIR/*.msg, read and act on each message in numeric order, then acknowledge each handled message by moving it: \`mv $INBOX_DIR/NNN.msg $INBOX_DIR/handled/\`.
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
 EOF
@@ -226,6 +285,36 @@ Under 40 lines, rewritten in place; it already exists with the headings.
 It is for your own thinking and for whoever picks the task up after you; nobody reads it to count anything.
 EOF
 LOGBOOK_SECTION=${LOGBOOK_SECTION%$'\n'}
+
+# The two doors upward (the epic's principle 3): pushing back on the story
+# before beginning, and the stuck door. Keyed status lines, so whoever answers
+# closes them with fm-send --resolve-key. Nothing here names what measures
+# the crewmate from outside; that is the leader's and the fleet's.
+IFS= read -r -d '' DOORS_SECTION <<EOF || true
+# Your story, and the two times you speak up
+If this story is too big to be ONE story and you can see two smaller vertical ones, say so now and stop:
+  \`echo "needs-decision: [key=story-size] {the two halves you see}" >> $STATUS_FILE\`
+Otherwise begin. From then on you do not surface until the story is done and self-verified,
+except when you are stuck in a loop or drifting from the story:
+  \`echo "blocked: [key=stuck] {what you tried, what you see}" >> $STATUS_FILE\`
+$DOORS_ANSWER
+Read long files and long command output through a sub-agent that returns only what you asked, rather than reading them yourself.
+EOF
+DOORS_SECTION=${DOORS_SECTION%$'\n'}
+
+# The crewmate contract, project-agnostic: who the crewmate reports to, the
+# landing order on a project that runs the loop (session, push, preview,
+# reading, the ready line, STOP before stage), and the three commands a
+# session never runs on its own judgement. One paragraph; the brief carries
+# it because a project's own rulebook may not reach the session.
+IFS= read -r -d '' CONTRACT_SECTION <<EOF || true
+# Crewmate contract
+You report to your leader or to First Mate, never to the captain: what you have to say goes in your status file, your logbook or your report, and the answer comes back in your inbox.
+On a project that runs the loop, land work in its order: \`session\` first, then push your branch, \`preview\`, get a reading, append your ready line, and STOP before \`stage\`; staging and everything after it are decided above you.
+Never run \`release\`, \`gc --prune\` or \`gc --abandon\` on your own judgement: only on the captain's word, carried in this brief or given in the conversation you are in.
+On a project without that loop, the Definition of done below is the whole landing.
+EOF
+CONTRACT_SECTION=${CONTRACT_SECTION%$'\n'}
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -370,9 +459,13 @@ TASK_SECTION=${TASK_SECTION%$'\n'}
 
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+You are crewmate \`$ID\`: an autonomous worker agent managed by firstmate; this brief lives at \`$BRIEF\`. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$DOORS_SECTION
+
+$CONTRACT_SECTION
 
 $HERDR_SECTION
 
@@ -399,9 +492,9 @@ The report is the only thing that survives, so anything worth keeping must be in
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset):
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
    treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; $HELPER.
 6. If a decision belongs to a human (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+   append \`needs-decision: {summary of options}\` and stop. $REPLIER.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
@@ -447,9 +540,13 @@ esac
 DOD=$(fm_dod_block "$MODE" "$ID") || exit 1
 
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+You are crewmate \`$ID\`: an autonomous worker agent managed by firstmate; this brief lives at \`$BRIEF\`. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$DOORS_SECTION
+
+$CONTRACT_SECTION
 
 $HERDR_SECTION
 
@@ -482,9 +579,9 @@ $RULE1
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; $HELPER.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+   append \`needs-decision: {summary of options}\` and stop. $REPLIER.
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.

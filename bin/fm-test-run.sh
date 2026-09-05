@@ -297,7 +297,7 @@ family_for_basename() {
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
     fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|\
-    fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|\
+    fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|fm-brief-doors.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
@@ -561,6 +561,7 @@ tests/fm-bearings-snapshot.test.sh 79954
 tests/fm-bootstrap-network-parallel.test.sh 8214
 tests/fm-bootstrap.test.sh 25208
 tests/fm-branch-supervision.test.sh 5729
+tests/fm-brief-doors.test.sh 6000
 tests/fm-busy-adapter-wiring.test.sh 17873
 tests/fm-busy-state.test.sh 2926
 tests/fm-calm-pi-extension.test.sh 256

@@ -2041,6 +2041,27 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
+# Brief/spawn leader agreement, the same way. fm-brief.sh --leader names the
+# leader in the brief's doors section ("Your leader, `<id>`, answers in your
+# inbox"); without --leader the brief says First Mate answers. A spawn that
+# disagrees would launch a crewmate whose brief names one answerer while its
+# record names another. A brief that says neither (hand-written, or scaffolded
+# before the doors existed) is launched as given.
+# shellcheck disable=SC2016  # the backticks are the brief's own Markdown, not a command substitution
+BRIEF_LEADER=$(sed -n 's/^Your leader, `\([^`]*\)`, answers in your inbox.*$/\1/p' "$BRIEF" | head -n 1)
+if [ -n "$BRIEF_LEADER" ] && [ "$BRIEF_LEADER" != "$LEADER_ARG" ]; then
+  if [ -n "$LEADER_ARG" ]; then
+    echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but this spawn passed --leader $LEADER_ARG; correct the flag or re-scaffold the brief" >&2
+  else
+    echo "error: leader mismatch for $ID: the brief names leader $BRIEF_LEADER but this spawn passed no --leader; pass --leader $BRIEF_LEADER or re-scaffold the brief without one" >&2
+  fi
+  exit 1
+fi
+if [ -n "$LEADER_ARG" ] && grep -q -x 'First Mate answers in your inbox.' "$BRIEF"; then
+  echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but this spawn passed --leader $LEADER_ARG; re-scaffold the brief with --leader $LEADER_ARG" >&2
+  exit 1
+fi
+
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
