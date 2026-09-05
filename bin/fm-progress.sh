@@ -109,10 +109,14 @@ section_lines() {  # <file> <name>
 #
 # THE RULE, and it is deliberately dumb: this deletes commit ids and nothing
 # else. It never deletes a word.
-#   (i)   every commit id that stands on its own goes - one that opens the
-#         line or follows a space, "(" or "," - so a hex run inside a longer
-#         token ("bin/fm-1234abc.sh", "v1.2.3-abc1234") is part of a word and
-#         is left alone;
+#   (i)   every commit id that STANDS ON ITS OWN goes, and standing on its
+#         own is read at BOTH ends: the character before it is absent, a
+#         space, "(" or ",", and the character after it is absent, a space,
+#         ")", ",", ";", ":" or a full stop that is itself a stop and not a
+#         suffix's dot - so a hex run inside a longer token, at its front
+#         ("1234abc.md", "a1b2c3d/probe.log", "deadb33f-fix"), its back
+#         ("v1.2.3-abc1234") or its middle ("bin/fm-1234abc.sh"), is part of
+#         a word and is left alone;
 #   (ii)  a bracket group left with no letter or digit inside it goes with
 #         them;
 #   (iii) punctuation and spacing are normalised, and only that: doubled
@@ -137,6 +141,12 @@ strike_commit_ids() {
       return (t ~ /^[0-9a-f]+$/) && (length(t) >= 7) && (length(t) <= 40) \
         && (t ~ /[0-9]/) && (t ~ /[a-f]/)
     }
+    function ends_run(s,   c, d) {
+      c = substr(s, 1, 1)
+      if (c == "" || c == " " || c == ")" || c == "," || c == ";" || c == ":") return 1
+      if (c == ".") { d = substr(s, 2, 1); return (d == "" || d !~ /[0-9A-Za-z]/) }
+      return 0
+    }
     {
       rest = $0; line = ""
       while (match(rest, /[0-9A-Za-z]+/)) {
@@ -146,8 +156,10 @@ strike_commit_ids() {
         else if (length(line) > 0) prev = substr(line, length(line), 1)
         else prev = ""
         line = line pre
-        if (!is_commit(tok) || (prev != "" && prev != " " && prev != "(" && prev != ",")) line = line tok
-        rest = substr(rest, RSTART + RLENGTH)
+        after = substr(rest, RSTART + RLENGTH)
+        if (!is_commit(tok) || (prev != "" && prev != " " && prev != "(" && prev != ",") \
+          || !ends_run(after)) line = line tok
+        rest = after
       }
       line = line rest
       out = ""
