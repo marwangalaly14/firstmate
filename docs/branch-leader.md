@@ -121,6 +121,17 @@ The estimate is yours: what is done, weighted by what is left.
 Keep the saved report at `data/<leader-id>/progress.md`; First Mate rolls every leader's bar into one fleet bar for the captain the same way, with `bin/fm-progress.sh fleet`.
 It is a report, never a gate: nothing reads the bar to stop, score or rank anyone.
 
+## The law of the head
+
+Memory machinery appends, or acts at a trim; it never rewrites the head between trims.
+
+The reason is the prompt cache.
+A turn re-reads the crewmate's whole head, and the part of it that has not changed since the last turn is served from the cache at roughly a tenth of the price; only fresh input and output are the real burn.
+Anything that changes the front of the head between turns - a memory file rewritten, a settings file touched, a hook that prints into the context on every prompt - forces one full-price re-read of everything, and a gap longer than the cache's life does the same.
+So everything that measures or steers a crewmate from the outside obeys one law: it reads the transcript, the status log, the worktree and the logbook, and writes only under `data/` and `state/`; the two hooks that do speak into the head, the keep-set ([`bin/fm-compact-keep.sh`](../bin/fm-compact-keep.sh)) and the task card ([`bin/fm-task-card.sh`](../bin/fm-task-card.sh)), speak at a trim and nowhere else; a steer is a durable record in the crewmate's inbox plus one constant doorbell line, an append.
+[`tests/fm-memory-append-law.test.sh`](../tests/fm-memory-append-law.test.sh) holds every piece of the machinery to it on a real spawn: the hooks the spawn installs (only the keep-set and the task card speak, both at a trim; every other hook runs and prints nothing; a hook on an event the suite has not classified fails it), and a run of the vitals, the signals check, the progress report, the leader's steer and trim order, the door relay and the trim-time scripts that leaves the worktrees, their memory files and harness settings, the user-level config, the project and the briefs byte-identical.
+A story that needs to put something in front of the crewmate between trims is a story that busts the cache on every turn; say so in its plan and let the Hand weigh it.
+
 ## What the leader never does
 
 - Never tells a crewmate about the machinery that measures it: no trim counts, no head sizes, no budgets in a brief or a steer.

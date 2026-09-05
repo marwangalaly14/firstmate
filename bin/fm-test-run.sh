@@ -296,7 +296,7 @@ family_for_basename() {
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-send-led-channel.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
-    fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|\
+    fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|fm-memory-append-law.test.sh|\
     fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|fm-brief-doors.test.sh|fm-lead-steer.test.sh|fm-spawn-fresh-head.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
@@ -604,6 +604,7 @@ tests/fm-inactive-reconcile.test.sh 41826
 tests/fm-kimi-harness.test.sh 18015
 tests/fm-lead-route-up.test.sh 70000
 tests/fm-lead-steer.test.sh 9000
+tests/fm-memory-append-law.test.sh 10000
 tests/fm-lint-workflows.test.sh 855
 tests/fm-logbook.test.sh 8000
 tests/fm-muse-harness.test.sh 55572
