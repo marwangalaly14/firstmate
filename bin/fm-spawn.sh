@@ -244,7 +244,11 @@
 # digest. A claude task's worktree hooks also carry a SessionStart entry (matcher
 # startup|resume|clear|fork, never compact) that appends the harness's real
 # session id, transcript path, model, and effort to data/<id>/sessions.log
-# through bin/fm-session-event.sh, whose header owns the record format.
+# through bin/fm-session-event.sh, whose header owns the record format, and a
+# second SessionStart entry (matcher compact) running bin/fm-task-card.sh,
+# whose stdout the harness puts into the crewmate's context when a trimmed
+# session resumes: the brief's intent and definition of done, the logbook,
+# the instructions waiting, and the last status line, read from disk.
 # The same hooks carry a PreCompact entry (matcher auto|manual) running
 # bin/fm-compact-keep.sh, whose stdout the harness appends to its summarizer's
 # instructions before every trim: the keep-set bin/fm-compact-lib.sh owns.
@@ -2882,8 +2886,17 @@ if [ "$KIND" != secondmate ]; then
       # command prints nothing, because the harness shows a PostCompact
       # hook's stdout in the crewmate's terminal.
       j_postcompact=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-trim-event.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
+      # The task card (bin/fm-task-card.sh): when a trimmed session resumes
+      # (SessionStart with source=compact, the one source the session record
+      # above does not match), the harness puts the hook's stdout into the
+      # crewmate's context, so the crewmate reads its brief's intent and
+      # definition of done, its logbook, the count of instructions waiting,
+      # and its last status line verbatim from disk instead of from the
+      # summary. Leaders included; the card's own words name none of the
+      # machinery.
+      j_taskcard=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-task-card.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]},{"matcher":"compact","hooks":[{"type":"command","command":"$j_taskcard"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;

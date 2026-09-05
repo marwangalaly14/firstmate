@@ -193,7 +193,9 @@ test_a_task_not_spawned_as_a_leader_cannot_be_named_as_one() {
   out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" c1 --leader plain) && fail "--leader naming a task without leads=1 must be refused"
   assert_contains "$out" "was not spawned as a leader (--leads)" "the refusal names the missing flag"
   [ ! -e "$HOME_DIR/state/c1.meta" ] || fail "a refused spawn leaves no record"
-  out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" c2 --leader lead-b); status=$?
+  # The spawn reads the leader's endpoint with fm-lead-lib's liveness read:
+  # the window listed by exact name and an agent in its foreground.
+  out=$(FM_FAKE_WINDOWS=fm-lead-b FM_FAKE_PANE_COMMAND=claude run_spawn "$HOME_DIR" "$PROJ_DIR" c2 --leader lead-b); status=$?
   [ "$status" -eq 0 ] || fail "--leader naming a recorded leader must succeed (exit $status)"$'\n'"$out"
   [ "$(meta_get "$HOME_DIR/state/c2.meta" leader)" = lead-b ] || fail "the crewmate records its leader"
   [ "$(meta_get "$HOME_DIR/state/c2.meta" trim_mark)" = "$FM_COMPACT_MARK" ] || fail "a led crewmate is a story crewmate: it gets the line"
