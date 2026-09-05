@@ -25,9 +25,18 @@
 #                                   of automatic trims so far, who was told, and
 #                                   the summary the harness wrote, verbatim.
 #     data/<task-id>/trims/index    one line per trim, appended last:
-#                                   <n> <trigger> <epoch> <head|?> <told>
+#                                   <n> <trigger> <epoch> <head|?> <told> [ordered:<leader>]
 #                                   (tab-separated; told is leader:<id>,
-#                                   firstmate, or -).
+#                                   firstmate, or -; the sixth field marks a
+#                                   manual trim the leader ordered).
+#   The index also carries the leader's orders, written by bin/fm-lead.sh
+#   trim before it types /compact: `ordered <epoch> <leader> <focus|->`, and
+#   `order-failed <epoch>` when the /compact provably did not reach the pane.
+#   A manual trim whose nearest earlier ledger line is a pending `ordered`
+#   line is the leader's: its record says `- ordered by: leader <id> ...` and
+#   its index line ends in ordered:<leader>; any other manual trim says
+#   `- ordered by: nobody in the ledger`. Order lines are never counted as
+#   trims.
 #   <n> counts every trim of the task, manual ones included. The automatic
 #   count N is 1 + max(automatic lines already in the index, earlier automatic
 #   compact_boundary rows in the transcript), so a ledger that missed a trim
@@ -147,9 +156,20 @@ INDEX="$TRIMS/index"
 mkdir -p "$TRIMS" 2>/dev/null || exit 0
 last_n=0
 auto_index=0
+# A pending order: the ledger's last line is an `ordered <epoch> <leader>
+# <focus>` line bin/fm-lead.sh trim wrote before typing /compact (an
+# `order-failed` line or a trim line after it clears it).
+ORDER_LEADER=
+ORDER_EPOCH=
+ORDER_FOCUS=
 if [ -f "$INDEX" ]; then
-  while IFS=$(printf '\t') read -r n trig _rest; do
-    case "$n" in ''|*[!0-9]*) continue ;; esac
+  while IFS=$(printf '\t') read -r n trig f3 f4 _rest; do
+    case "$n" in
+      ordered) ORDER_EPOCH=$trig; ORDER_LEADER=$f3; ORDER_FOCUS=$f4; continue ;;
+      order-failed) ORDER_LEADER=; ORDER_EPOCH=; ORDER_FOCUS=; continue ;;
+      ''|*[!0-9]*) continue ;;
+    esac
+    ORDER_LEADER=; ORDER_EPOCH=; ORDER_FOCUS=
     [ "$n" -gt "$last_n" ] && last_n=$n
     [ "$trig" = auto ] && auto_index=$((auto_index + 1))
   done < "$INDEX"
@@ -202,6 +222,13 @@ write_record() {  # <told line>
     fi
     [ -z "$MARK" ] || printf -- '- trim line: %s\n' "$(k_of "$MARK")"
     printf -- '- automatic trims so far: %s\n' "$N_AUTO"
+    if [ "$TRIGGER" = manual ]; then
+      if [ -n "$ORDER_LEADER" ]; then
+        printf -- '- ordered by: leader %s (order at epoch %s, focus: %s)\n' "$ORDER_LEADER" "$ORDER_EPOCH" "$ORDER_FOCUS"
+      else
+        printf -- '- ordered by: nobody in the ledger (a typed /compact without a leader order)\n'
+      fi
+    fi
     printf -- '- told: %s\n' "$1"
     printf '\n## Summary\n\n%s\n' "$SUMMARY"
   } > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
@@ -258,5 +285,7 @@ if [ "$TRIGGER" = auto ] && [ "$N_AUTO" -ge 2 ]; then
 fi
 
 write_record "$TOLD_LINE" || true
-printf '%s\t%s\t%s\t%s\t%s\n' "$N" "$TRIGGER" "$EPOCH" "$HEAD" "$TOLD" >> "$INDEX" 2>/dev/null || true
+ORDERED=
+[ "$TRIGGER" = manual ] && [ -n "$ORDER_LEADER" ] && ORDERED="ordered:$ORDER_LEADER"
+printf '%s\t%s\t%s\t%s\t%s%s\n' "$N" "$TRIGGER" "$EPOCH" "$HEAD" "$TOLD" "${ORDERED:+$(printf '\t%s' "$ORDERED")}" >> "$INDEX" 2>/dev/null || true
 exit 0

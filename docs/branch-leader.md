@@ -25,7 +25,7 @@ A led crewmate's brief gives it exactly two reasons to surface before its story 
 Both are answered through the crewmate's steering inbox and closed by the answer itself:
 
 ```sh
-FM_HOME=<home> bin/fm-send.sh <crewmate-id> --resolve-key stuck "<one line: the cause you see and what to do next>"
+FM_HOME=<home> bin/fm-lead.sh steer --leader <leader-id> <crewmate-id> --resolve-key stuck "<one line: the cause you see and what to do next>"
 ```
 
 The key on `--resolve-key` is the door's key (`story-size` or `stuck`); the record stays open until a `resolved` line carrying that exact key lands, and `fm-send` writes that line at answer time ([`bin/fm-send.sh`](../bin/fm-send.sh) header).
@@ -49,6 +49,9 @@ Read that record against the story's acceptance criteria.
 
 - If the summary is on the spec, steer nothing.
 - If it is not, steer once: restate the goal in one line, pin what matters, name what to drop.
+- If the crewmate's head is heavy with what it no longer needs, order a trim with a focus: `FM_HOME=<home> bin/fm-lead.sh trim --leader <leader-id> <crewmate-id> <what to keep>`.
+  The order is written into the crewmate's trim ledger first, then `/compact <focus>` is typed into its pane; a crewmate that is mid-turn queues the typed order and trims at its next turn boundary (measured live on 2.1.259: typed 8 s into a 49 s turn, queued on screen, run 10 ms after the turn ended), so an order is never an interrupt.
+  The trim that follows is recorded as the leader's (`- ordered by: leader <id>`) and rings nobody.
 - If the story is two stories, write the split note for First Mate in your logbook and status.
 - If the crewmate cannot be steered back, write the handover note from its logbook; First Mate relaunches, because a relaunch is irreversible and the leader never performs one.
 
@@ -61,11 +64,13 @@ Steers are short; the crewmate reads each once, and the leader is measured on th
 Steer with ordinary text:
 
 ```sh
-FM_HOME=<home> bin/fm-send.sh <crewmate-id> "<the steer>"
+FM_HOME=<home> bin/fm-lead.sh steer --leader <leader-id> <crewmate-id> "<the steer>"
 ```
 
+`steer` sends the text through `fm-send` exactly as First Mate would (the durable inbox record plus the doorbell), refuses a crewmate outside your chain or one whose endpoint is dead (lifecycle is First Mate's), copies the first line into your own status as `note: steered <crewmate-id> (<chars> chars, <lines> lines): ...`, and measures the steer in `data/<leader-id>/steers/index` ([`bin/fm-lead.sh`](../bin/fm-lead.sh) header).
+Over 1,200 characters it warns and sends anyway.
 `FM_HOME` must be explicit, so a steer never resolves against another home.
-Report your own progress to First Mate as status lines, as any crewmate does; a `note:` line reaches First Mate's next unread-status section without waking it.
+Report your own progress to First Mate as status lines, as any crewmate does; a `note:` line reaches First Mate's next unread-status section without waking it, which is how First Mate sees every steer.
 
 ## What the leader never does
 

@@ -251,6 +251,49 @@ test_manual_trim_records_and_rings_nobody() {
   pass "a manual trim is recorded (count unchanged, told nobody) and rings neither the leader nor First Mate; a leader's record names no trim line"
 }
 
+# --- 3b. a manual trim after the leader's order is the leader's ---------------
+test_manual_trim_after_an_order_is_attributed() {
+  local home t idx
+  make_home ordered; home=$HOME_DIR
+  write_task "$home" lead-a "leads=1"
+  write_task "$home" c1 "leader=lead-a"
+  t="$home/c1.jsonl"
+  write_transcript "$t"
+  run_hook "$home" c1 "$(payload auto "$t")"
+  idx="$home/data/c1/trims/index"
+  # The real order: fm-lead trim writes the ordered line, then types /compact.
+  env PATH="$FAKEBIN:$PATH" FM_HOME="$home" FM_SEND_LOG="$home/send.log" FM_FAKE_STATE="$home/state" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-lead.sh" trim --leader lead-a c1 the failing test >/dev/null 2>"$home/lead.err" \
+    || fail "the leader's trim order failed:"$'\n'"$(cat "$home/lead.err")"
+  assert_contains "$(cat "$home/send.log")" "/compact the failing test" "the order is typed"
+  [ "$(sed -n '2p' "$idx" | cut -f1,3,4)" = $'ordered\tlead-a\tthe failing test' ] || fail "the order line follows the first trim:"$'\n'"$(cat "$idx")"
+  run_hook "$home" c1 "$(payload manual "$t" "Focused on the failing test.")"
+  assert_quiet "$home" "ordered manual trim"
+  [ -f "$home/data/c1/trims/2.md" ] || fail "the ordered trim is trim 2 (order lines are not trims)"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- ordered by: leader lead-a (order at epoch " "the record names the leader's order"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "focus: the failing test)" "the record carries the focus"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- automatic trims so far: 1" "an ordered trim is manual: not counted"
+  assert_contains "$(cat "$home/data/c1/trims/2.md")" "- told: nobody (manual trim)" "an ordered trim rings nobody: the leader ordered it"
+  [ "$(sed -n '3p' "$idx" | cut -f1,2,5,6)" = $'2\tmanual\t-\tordered:lead-a' ] || fail "the ledger line ends in ordered:<leader>:"$'\n'"$(cat "$idx")"
+  [ ! -d "$home/state/lead-a.inbox" ] || fail "an ordered trim does not ring the leader"
+  # A manual trim with no pending order (the order was consumed) is nobody's.
+  run_hook "$home" c1 "$(payload manual "$t" "Typed by hand.")"
+  assert_contains "$(cat "$home/data/c1/trims/3.md")" "- ordered by: nobody in the ledger" "a manual trim without an order is not attributed"
+  [ "$(sed -n '4p' "$idx" | cut -f6)" = '' ] || fail "no sixth field without an order:"$'\n'"$(cat "$idx")"
+  # An order that did not reach the pane (order-failed) attributes nothing.
+  printf 'ordered\t%s\tlead-a\tlate\norder-failed\t%s\n' "$(date +%s)" "$(date +%s)" >> "$idx"
+  run_hook "$home" c1 "$(payload manual "$t" "Typed by hand again.")"
+  assert_contains "$(cat "$home/data/c1/trims/4.md")" "- ordered by: nobody in the ledger" "a failed order attributes nothing"
+  # An automatic trim never carries an order line, and the count still ignores order lines.
+  printf 'ordered\t%s\tlead-a\tpending\n' "$(date +%s)" >> "$idx"
+  rm -rf "$home/state/lead-a.inbox"
+  run_hook "$home" c1 "$(payload auto "$t")"
+  case "$(cat "$home/data/c1/trims/5.md")" in *"ordered by"*) fail "an automatic trim has no ordered-by line" ;; esac
+  assert_contains "$(cat "$home/data/c1/trims/5.md")" "- automatic trims so far: 2" "order lines are never counted as trims"
+  [ -f "$home/state/lead-a.inbox/001.msg" ] || fail "the second automatic trim still rings the leader"
+  pass "a manual trim after fm-lead's order is the leader's (record and ledger say so, not counted, rings nobody); a hand-typed or failed-order trim is nobody's; order lines never count"
+}
+
 # --- 4. no live leader: First Mate gets one signal wake -----------------------
 test_without_a_live_leader_first_mate_is_signalled() {
   local home t q
@@ -436,6 +479,7 @@ EOF
 test_records_every_trim
 test_second_automatic_trim_rings_the_leader
 test_manual_trim_records_and_rings_nobody
+test_manual_trim_after_an_order_is_attributed
 test_without_a_live_leader_first_mate_is_signalled
 test_unreadable_payloads_write_nothing
 test_earlier_automatic_trims_count_through_the_transcript
