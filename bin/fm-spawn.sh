@@ -245,6 +245,9 @@
 # startup|resume|clear|fork, never compact) that appends the harness's real
 # session id, transcript path, model, and effort to data/<id>/sessions.log
 # through bin/fm-session-event.sh, whose header owns the record format.
+# The same hooks carry a PreCompact entry (matcher auto|manual) running
+# bin/fm-compact-keep.sh, whose stdout the harness appends to its summarizer's
+# instructions before every trim: the keep-set bin/fm-compact-lib.sh owns.
 # A claude ship or scout crewmate that is not a leader is a story crewmate: its
 # worktree .claude/settings.local.json also carries the one settings key that
 # moves the harness's automatic trim to the captain's 140K line, derived in
@@ -2859,8 +2862,15 @@ if [ "$KIND" != secondmate ]; then
         SPAWN_TRIM_WINDOW=$(fm_compact_window) || exit 1
         j_trim=",\"$FM_COMPACT_SETTINGS_KEY\":$SPAWN_TRIM_WINDOW"
       fi
+      # The keep-set (bin/fm-compact-keep.sh): before every trim, automatic or
+      # typed, the harness appends the hook's stdout to its summarizer's
+      # instructions, so each summary keeps the acceptance criteria, the
+      # failing test, the last decision, the files changed, and the pending
+      # instructions. Leaders included; the crewmate's own context never
+      # carries the text.
+      j_precompact=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-compact-keep.sh") 2>/dev/null || true")
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]}]}$j_trim}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}]}$j_trim}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;

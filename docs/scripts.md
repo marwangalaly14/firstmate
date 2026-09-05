@@ -112,7 +112,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-session-event.sh`    | Append a claude task's real session id, transcript path, model, and effort to `data/<id>/sessions.log` from its SessionStart hook |
 | `fm-lead.sh`             | The branch leader's view of its own crewmates: `crew` lists the tasks recorded under a leader with the digest's cheap endpoint read |
 | `fm-lead-lib.sh`         | One owner of the branch-leader chain (`leader=` in task meta), who may lead, and the four-crewmate ceiling the spawn enforces |
-| `fm-compact-lib.sh`      | One owner of the 140K line: the mark, the harness's two terms, and the derived `autoCompactWindow` the spawn writes for a claude story crewmate |
+| `fm-compact-lib.sh`      | One owner of the 140K line (the mark, the harness's two terms, the derived `autoCompactWindow`) and of the keep-set every trim's summary must keep |
+| `fm-compact-keep.sh`     | Print the keep-set to the harness's summarizer from a claude PreCompact hook, before every automatic or typed trim |
 | `fm-branch-prompt.sh`    | Emit the Pi supervision branch's byte-stable system prompt ([pi-supervision-branch.md](pi-supervision-branch.md)) |
 | `fm-branch-outcome.sh`   | Own the supervision branch's append-only outcome store, cursors, bounded status-coverage indexes, and session-start replay |
 | `fm-lease.sh`            | Claim, release, inspect, and sweep per-task supervision leases                       |

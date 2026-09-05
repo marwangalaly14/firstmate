@@ -297,6 +297,7 @@ family_for_basename() {
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
     fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|\
+    fm-compact-keep.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
@@ -570,6 +571,7 @@ tests/fm-claude-stop-autoarm-live-e2e.test.sh 21
 tests/fm-claude-stop-autoarm.test.sh 60709
 tests/fm-cmux-claude-composer-live-e2e.test.sh 23
 tests/fm-codex-continuity-live-e2e.test.sh 21
+tests/fm-compact-keep.test.sh 9000
 tests/fm-compact-lib.test.sh 400
 tests/fm-composer-matrix-live-e2e.test.sh 23
 tests/fm-control-relaunch.test.sh 48210

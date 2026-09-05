@@ -37,6 +37,15 @@
 # somewhere, and this only moves that point from its default (167000 for an
 # assumed 200K model, 267000 for a 300K one) to the line the captain named.
 #
+# The keep-set is the other half: what every trim's summary must keep. The
+# harness runs a PreCompact hook before each trim, automatic or manual, and
+# appends the hook's stdout to the summarizer's own instructions under
+# "Additional Instructions" (read from the same binary: the compaction runs
+# the hooks, joins their output to any /compact focus, and builds the summary
+# request from that). The spawn installs bin/fm-compact-keep.sh there, which
+# prints fm_compact_keep_set; the crewmate's own context never carries it.
+#
+# fm_compact_keep_set                   -> the keep-set text, for the summarizer
 # fm_compact_window                     -> 173000, the window for FM_COMPACT_MARK
 # fm_compact_window_for_mark <mark>     -> <mark> + reserved output + margin
 # fm_compact_mark_of_window <window>    -> <window> - reserved output - margin
@@ -47,6 +56,7 @@
 FM_COMPACT_MARK=140000
 FM_COMPACT_RESERVED_OUTPUT=20000
 FM_COMPACT_MARGIN=13000
+# shellcheck disable=SC2034 # The key's one spelling, read by bin/fm-spawn.sh and the tests.
 FM_COMPACT_SETTINGS_KEY=autoCompactWindow
 
 fm_compact__is_count() {  # <value> -> 0 when a non-empty decimal integer
@@ -83,4 +93,16 @@ fm_compact_check_window() {  # <window>
     return 1
   }
   return 0
+}
+
+fm_compact_keep_set() {
+  cat <<'EOF'
+Keep verbatim, whatever else is dropped:
+- the story's acceptance criteria (the brief's Definition of done and any acceptance list), word for word;
+- the exact current failing test or error and its output;
+- the last decision taken and its reason;
+- every file changed so far and why;
+- every instruction received and not yet done.
+Drop the contents of files already committed, exploration that led nowhere, and tool output older than the last decision.
+EOF
 }
