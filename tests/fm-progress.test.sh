@@ -175,12 +175,14 @@ test_fleet_rolls_the_leaders_bars_into_one() {
   write_task "$HOME_DIR" lead-c "leads=1"
   write_task "$HOME_DIR" c1 "leader=lead-a"
   fence='```'
-  printf 'Goal: The branch leader manages its crewmates memory.\n\n%s\n[########............] 40%%\n%s\n\nDONE\n- [x] one\n' "$fence" "$fence" > "$DATA/lead-a/progress.md"
-  printf 'Goal: Extraction of the harness.\n\n%s\n[################....] 80%%\n%s\n' "$fence" "$fence" > "$DATA/lead-b/progress.md"
+  # lead-a has three stories done, lead-b one: a fleet bar weighted by story
+  # count would read 50%; the mean of the two bars is 60%.
+  printf 'Goal: The branch leader manages its crewmates memory.\n\n%s\n[########............] 40%%\n%s\n\nDONE\n- [x] one\n- [x] two\n- [x] three\n' "$fence" "$fence" > "$DATA/lead-a/progress.md"
+  printf 'Goal: Extraction of the harness.\n\n%s\n[################....] 80%%\n%s\n\nDONE\n- [x] one\n' "$fence" "$fence" > "$DATA/lead-b/progress.md"
   run_progress fleet
   [ "$RC" -eq 0 ] || fail "fleet exits 0, got $RC: $ERR"
   assert_contains "$OUT" "Fleet: 3 epic branch leader(s), 2 with a saved report" "the count of leaders and reports"
-  assert_contains "$OUT" "[############........] 60%" "the fleet bar is the mean of the saved bars, 40 and 80"
+  assert_contains "$OUT" "[############........] 60%" "the fleet bar is the mean of the saved bars, 40 and 80, never weighted by story count"
   first=$(printf '%s\n' "$OUT" | grep -n -F -m1 '[############........] 60%' | cut -d: -f1)
   [ "$(printf '%s\n' "$OUT" | sed -n "$((first - 1))p")" = '```' ] || fail "the fleet bar is in a code block"
   assert_contains "$OUT" "[########............] 40%  lead-a  The branch leader manages its crewmates memory." "each leader's bar, percentage and goal follow"
