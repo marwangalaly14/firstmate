@@ -126,7 +126,7 @@ EOF
     || fail "the bar is in a code block:"$'\n'"$OUT"
   # 3. DONE: ticked, one per logbook line, commit ids struck out
   assert_contains "$OUT" "- [x] Crewmates trim at the 140K line with a keep-set, proved live." "a Done line is ticked with its commit id struck out"
-  assert_contains "$OUT" "- [x] A leader's steer lands in the crewmate's inbox and is measured." "two commit ids in one line are both struck out"
+  assert_contains "$OUT" "- [x] A leader's steer lands in the crewmate's inbox and is measured (landed after)." "two commit ids in one line are both struck out, and the words around them are left where they were"
   assert_not_contains "$OUT" "7ea43a4" "no commit id survives"
   assert_not_contains "$OUT" "99e8821" "no commit id survives (landed)"
   assert_not_contains "$OUT" "a6d3c9e" "no commit id survives (after)"
@@ -188,69 +188,50 @@ EOF
     "a plain long number survives word for word: it is not a commit id"
   assert_contains "$OUT" "- [x] The order at epoch 1757100000 was typed into the pane." \
     "an epoch - what this project's own ledgers record - survives word for word"
-  assert_contains "$OUT" "- [x] The keep-set landed, proved live." \
-    "a mixed hex word is struck with the preposition that introduced it, leaving no double space"
+  assert_contains "$OUT" "- [x] The keep-set landed in, proved live." \
+    "a mixed hex word is struck and the word it followed is left alone, with no double space"
   assert_contains "$OUT" "- [x] The steer is measured." \
     "a parenthesised commit id leaves no stray parenthesis or space before the stop"
   assert_not_contains "$OUT" "7ea43a4" "no commit id survives"
   assert_not_contains "$OUT" "99e8821" "nor a parenthesised one"
-  pass "the DONE section strikes only a hex word that mixes digits and a-f letters: a plain long number and an epoch survive word for word, a real commit id goes with its preposition and leaves no double space or stray parenthesis"
+  pass "the DONE section strikes only a hex word that mixes digits and a-f letters: a plain long number and an epoch survive word for word, a real commit id goes on its own and leaves no double space or stray parenthesis"
 }
 
-# THE RULE for a struck commit id, asserted as an invariant over the whole
-# matrix rather than as a list of examples: the id, the brackets it emptied,
-# the separator that introduced it (a space, or a comma and a space) and the
-# introducer word it followed all go as ONE unit, wherever in the sentence
-# they stood and whatever their capitalisation. What is left must read as a
-# sentence: no doubled space, no space before a stop, no ",." or ",,", no
-# leading comma or space, no empty or unpaired bracket, and a capital first
-# letter.
-test_a_struck_commit_id_leaves_a_grammatical_sentence() {
-  local intro word sep open close position n want got done_lines bad expected
+# THE RULE, asserted case by case AND as an invariant: the stripper deletes
+# commit ids and the brackets they empty, and never a word. The stranded
+# introducer ("In,", "(in and)") is the accepted reading and is written down
+# here as such - the writer's rule, that DONE lines carry no commit ids in the
+# first place, is what keeps those lines out of a report; this is only the net
+# under it. What every line must still satisfy: no doubled space, no space
+# before . , ; : or ), no ",." or ",,", no empty bracket and no bracket
+# without its partner.
+test_the_stripper_deletes_ids_and_never_a_word() {
+  local n want got done_lines bad
   make_home strikerule
   write_task "$HOME_DIR" lead-r "leads=1"
-  # Every introducer, times capitalisation, times where in the sentence the
-  # citation stands, times the separator, times the bracketing. Each case's
-  # expected reading is the same sentence with the citation gone.
-  CASES=()
-  EXPECTED=()
-  for intro in after in at as landed commit from to; do
-    for word in "$intro" "$(printf '%s' "$intro" | tr '[:lower:]' '[:upper:]' | cut -c1)$(printf '%s' "$intro" | cut -c2-)"; do
-      for sep in ' ' ', '; do
-        for open in '' '('; do
-          if [ -n "$open" ]; then close=')'; else close=; fi
-          for position in opens mid ends; do
-            case "$position" in
-              opens)
-                CASES+=("$(printf '%s%s%s7ea43a4%s, the crew read it and moved on.' "$word" "$sep" "$open" "$close")")
-                EXPECTED+=("The crew read it and moved on.") ;;
-              mid)
-                CASES+=("$(printf 'The crew %s%s%s7ea43a4%s read it and moved on.' "$word" "$sep" "$open" "$close")")
-                EXPECTED+=("The crew read it and moved on.") ;;
-              ends)
-                CASES+=("$(printf 'The crew read it and moved on %s%s%s7ea43a4%s.' "$word" "$sep" "$open" "$close")")
-                EXPECTED+=("The crew read it and moved on.") ;;
-            esac
-          done
-        done
-      done
-    done
-  done
-  # The named shapes, and the round-2 protections that must survive word for word.
-  CASES+=("The keep-set landed, 7ea43a4.");            EXPECTED+=("The keep-set.")
-  CASES+=("It landed, 7ea43a4.");                      EXPECTED+=("It.")
-  CASES+=("The keep-set landed (7ea43a4).");           EXPECTED+=("The keep-set.")
-  CASES+=("The keep-set landed 7ea43a4.");             EXPECTED+=("The keep-set.")
-  CASES+=("The leader's hands, in (99e8821).");        EXPECTED+=("The leader's hands.")
-  CASES+=("The card ships (7ea43a4) today.");          EXPECTED+=("The card ships today.")
-  CASES+=("In 7ea43a4, the keep-set landed.");         EXPECTED+=("The keep-set landed.")
-  CASES+=("After 7ea43a4, the crew read it.");         EXPECTED+=("The crew read it.")
-  CASES+=("Landed 7ea43a4, and the crew read it.");    EXPECTED+=("And the crew read it.")
-  CASES+=("after 7ea43a4, the tests pass.");           EXPECTED+=("The tests pass.")
+  CASES=();  EXPECTED=()
+  # The ordinary shapes: the id goes, the sentence keeps every word it had.
+  CASES+=("The keep-set landed (7ea43a4).");                     EXPECTED+=("The keep-set landed.")
+  CASES+=("It landed, 7ea43a4.");                                EXPECTED+=("It landed.")
+  CASES+=("The keep-set landed 7ea43a4.");                       EXPECTED+=("The keep-set landed.")
+  CASES+=("The leader landed (7ea43a4) and the crew read it.");   EXPECTED+=("The leader landed and the crew read it.")
+  CASES+=("The card ships (7ea43a4) today.");                     EXPECTED+=("The card ships today.")
+  CASES+=("The keep-set landed (7ea43a4, 8b2c1d9).");             EXPECTED+=("The keep-set landed.")
+  CASES+=("Landed 7ea43a4 and 8b2c1d9 in order.");                EXPECTED+=("Landed and in order.")
+  # The accepted blemishes: a word the id was leaning on stays where it was.
+  CASES+=("In 7ea43a4, the keep-set landed.");                    EXPECTED+=("In, the keep-set landed.")
+  CASES+=("After 7ea43a4, the crew read it.");                    EXPECTED+=("After, the crew read it.")
+  CASES+=("Landed (in 7ea43a4 and 8b2c1d9).");                    EXPECTED+=("Landed (in and).")
+  CASES+=("7ea43a4 landed the keep-set.");                        EXPECTED+=("landed the keep-set.")
+  # The words that only look like hashes, and must survive word for word.
   CASES+=("Cut the crewmate's fresh head from 1560000 to 1400000 tokens.")
   EXPECTED+=("Cut the crewmate's fresh head from 1560000 to 1400000 tokens.")
   CASES+=("The order at epoch 1757100000 was typed into the pane.")
   EXPECTED+=("The order at epoch 1757100000 was typed into the pane.")
+  CASES+=("The line was effaced by the editor.")
+  EXPECTED+=("The line was effaced by the editor.")
+  CASES+=("The tag 7EA43A4B is the release's, not a commit's.")
+  EXPECTED+=("The tag 7EA43A4B is the release's, not a commit's.")
 
   {
     printf '# Logbook: lead-r\n\n## Done\n'
@@ -267,15 +248,13 @@ test_a_struck_commit_id_leaves_a_grammatical_sentence() {
     [ "$got" = "$want" ] || fail "'${CASES[$n]}' must read '$want', got '$got'"
   done
   assert_not_contains "$done_lines" "7ea43a4" "no commit id survives"
-  assert_not_contains "$done_lines" "99e8821" "nor a bracketed one"
+  assert_not_contains "$done_lines" "8b2c1d9" "nor a second one on the same line"
   # The invariant, over every DONE line the report printed.
-  bad=$(printf '%s\n' "$done_lines" | grep -n -e '  ' -e ' [.,;:)]' -e ',\.' -e ',,' -e '^[ ,]' -e '()' || true)
-  [ -z "$bad" ] || fail "a struck line must read as a sentence - no doubled space, no space before a stop, no ',.' or ',,', no leading comma or space, no empty '()' - got:"$'\n'"$bad"
+  bad=$(printf '%s\n' "$done_lines" | grep -n -e '  ' -e ' [.,;:)]' -e ',\.' -e ',,' -e '()' || true)
+  [ -z "$bad" ] || fail "a struck line carries no stray punctuation - no doubled space, no space before . , ; : or ), no ',.' or ',,', no empty '()' - got:"$'\n'"$bad"
   bad=$(printf '%s\n' "$done_lines" | awk '{ o = gsub(/\(/, "("); c = gsub(/\)/, ")"); if (o != c) print NR ": " $0 }')
   [ -z "$bad" ] || fail "no bracket is left without its partner, got:"$'\n'"$bad"
-  bad=$(printf '%s\n' "$done_lines" | grep -n '^[^A-Z]' || true)
-  [ -z "$bad" ] || fail "every struck line still opens with a capital letter, got:"$'\n'"$bad"
-  pass "a struck commit id takes its brackets, its separator and its introducer with it across every introducer, capitalisation, position, separator and bracketing (${#CASES[@]} shapes), leaving a sentence that opens with a capital and carries no stray punctuation; an all-digit run is not a commit id and survives word for word"
+  pass "the stripper deletes commit ids and the brackets they empty and never a word: ${#CASES[@]} shapes read exactly as written down, stranded introducers included, and no line carries a doubled space, a space before a stop, ',.' or ',,', an empty bracket or a bracket without its partner"
 }
 
 test_fleet_rolls_the_leaders_bars_into_one() {
@@ -313,5 +292,5 @@ test_bar_renders_twenty_cells
 test_scaffold_carries_the_six_parts
 test_scaffold_without_inputs_says_what_is_missing
 test_only_a_mixed_hex_word_is_struck_from_done
-test_a_struck_commit_id_leaves_a_grammatical_sentence
+test_the_stripper_deletes_ids_and_never_a_word
 test_fleet_rolls_the_leaders_bars_into_one

@@ -195,7 +195,7 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
     def epoch_or_null($s): if $s == "" then null else ($s | tonumber) end;
     reduce (inputs | fromjson? // empty) as $r (
       {head: null, first_head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
-       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null, last_conv: null,
+       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_conv: null,
        helper_ts: null};
       .rows += 1
       | if ($r.isSidechain // false) == true then

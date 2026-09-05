@@ -112,6 +112,7 @@ Every epic branch leader reports progress in one shape, stewarded on its branch 
 - one closing paragraph, "What the bar means": what the epic can do today and what the missing part buys.
 
 Write it from your own logbook and the vitals, never from the crewmates' words.
+Write the DONE lines without commit ids in the first place: name what changed for a person, not the commit that carried it. The scaffold's stripper deletes any id that slips through, and only that - it never removes a word, so a citation's leftover wording stays as you wrote it.
 The scaffold fills what it can read and leaves the rest to you:
 
 ```sh

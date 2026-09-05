@@ -349,9 +349,11 @@ fi
 # The crewmate contract, project-agnostic: who the crewmate reports to, the
 # landing order on a project that runs the loop (session, push, preview,
 # reading, the ready line, STOP before stage), the three commands a session
-# never runs on its own judgement, and the proof habit (plant a fault before
-# believing a clean result from a check you wrote). One paragraph; the brief
-# carries it because a project's own rulebook may not reach the session.
+# never runs on its own judgement, the proof habit (plant a fault before
+# believing a clean result from a check you wrote), and the writer's rule that
+# keeps commit ids out of a report before any stripper has to. One paragraph;
+# the brief carries it because a project's own rulebook may not reach the
+# session.
 IFS= read -r -d '' CONTRACT_SECTION <<EOF || true
 # Crewmate contract
 You report to your leader or to First Mate, never to the captain: what you have to say goes in your status file, your logbook or your report, and the answer comes back in your inbox.
@@ -359,6 +361,7 @@ On a project that runs the loop, land work in its order: \`session\` first, then
 Never run \`release\`, \`gc --prune\` or \`gc --abandon\` on your own judgement: only on the captain's word, carried in this brief or given in the conversation you are in.
 On a project without that loop, the Definition of done below is the whole landing.
 Before you believe a clean result from a check you wrote, plant a fault and watch it go red.
+Write your DONE lines and your progress report without commit ids in the first place: name what changed for a person, not the commit that carried it.
 EOF
 CONTRACT_SECTION=${CONTRACT_SECTION%$'\n'}
 

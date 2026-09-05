@@ -1385,16 +1385,20 @@ EOF
 # have one, and either way the ledger then says rung or why not before the
 # hold is judged.
 # The end of the span AND the file's identity are taken ONCE, together, before
-# the span is read, and published in FM_HELD_SPAN_END and FM_HELD_SPAN_IDENT
-# for the caller to carry to leader_absorb_signals: the bytes judged here and
-# the bytes marked classified there must be the same bytes OF THE SAME FILE.
-# Reading the identity again at absorb time would bind this file's offset to
-# whatever file stands in its place after the relay, the send and the settle
-# wait - a recreated log would have its first bytes marked as already read.
+# the span is read; the identity is read again AFTER the span and must match,
+# or nothing is held and nothing is marked for that file, the way
+# status_span_first_actionable_record in bin/fm-classify-lib.sh refuses a span
+# whose file changed under it. What survives both reads is published in
+# FM_HELD_SPAN_END and FM_HELD_SPAN_IDENT for the caller to carry to
+# leader_absorb_signals: the bytes judged here and the bytes marked classified
+# there must be the same bytes OF THE SAME FILE. Reading the identity again at
+# absorb time would bind this file's offset to whatever file stands in its
+# place after the relay, the send and the settle wait - a recreated log would
+# have its first bytes marked as already read.
 # The status log is append-only, so [start, end) is stable; anything the
 # crewmate appends after this read stays unclassified and is judged next poll.
 leader_holds_signal() {  # <status-or-turn-ended-file>
-  local f=$1 task start end ident span line key doors=0 events
+  local f=$1 task start end ident cur_ident span line key doors=0 events
   FM_HELD_SPAN_END=
   FM_HELD_SPAN_IDENT=
   case "$f" in
@@ -1415,6 +1419,10 @@ leader_holds_signal() {  # <status-or-turn-ended-file>
       ident=$(status_file_identity "$f") || ident=
       [ "$end" -ge "$start" ] || return 1
       span=$(LC_ALL=C tail -c "+$((start + 1))" "$f" 2>/dev/null | LC_ALL=C head -c "$((end - start))") || return 1
+      if [ -n "$ident" ]; then
+        cur_ident=$(status_file_identity "$f") || cur_ident=
+        [ "$cur_ident" = "$ident" ] || return 1
+      fi
       while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in *[![:space:]]*) ;; *) continue ;; esac
         status_is_captain_relevant "$line" || continue

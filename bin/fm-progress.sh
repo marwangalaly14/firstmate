@@ -106,27 +106,27 @@ section_lines() {  # <file> <name>
 # all-letter hash is not struck, which is rare and harmless, because this is a
 # report and never a gate.
 #
-# THE RULE. Removing a commit id removes, as one unit:
-#   - the id itself;
-#   - any brackets that wrapped it and are left empty;
-#   - the separator that directly introduced it (a space, or a comma and a
-#     space);
-#   - and the introducer word - after, in, at, as, landed, commit, from, to,
-#     in any capitalisation - when the id followed it through nothing but
-#     those separators and brackets.
-# What remains must be a grammatical sentence, wherever the citation stood:
-# no doubled space, no space before . , ; : or ), no ",." and no ",,", no
-# leading comma or space, no empty "()", no bracket without its partner, and a
-# capital first letter when the strike took away the words the line opened
-# with. tests/fm-progress.test.sh asserts that as an invariant over every
-# introducer, capitalisation, position, separator and bracketing, not as a
-# list of examples.
+# THE RULE, and it is deliberately dumb: this deletes commit ids and nothing
+# else. It never deletes a word.
+#   (i)   every commit id goes;
+#   (ii)  a bracket group left with no letter or digit inside it goes with
+#         them;
+#   (iii) punctuation and spacing are normalised, and only that: doubled
+#         spaces collapse, a space before . , ; : or ) goes, a space after (
+#         goes, a comma left directly before a full stop or another comma
+#         goes, and the two ends are trimmed.
+# No introducer, no preposition, no verb, no word of any kind is removed, so a
+# stranded "In," or "(in and)" is the accepted reading, not a bug. It is dumb
+# on purpose: a leader writes its DONE lines without commit ids in the first
+# place (the crewmate contract bin/fm-brief.sh writes into every brief says
+# so), this is only the net under that rule, and four attempts at rewriting
+# the sentence each fixed the cases they were given and broke one they were
+# not. tests/fm-progress.test.sh holds every shape above, and the invariant
+# that no line comes out with a doubled space, a space before a stop, ",.",
+# ",,", an empty bracket or a bracket without its partner.
 #
-# It is one awk pass, not a strike plus a tidy-up: the cleanup has to know
-# whether the line's opening was struck away in order to restore the capital,
-# so the two cannot be separate programs. The commit-id predicate needs a look
-# at the whole token, which portable ERE cannot express, which is why the
-# strike is awk at all.
+# It is awk rather than sed because the commit-id predicate needs a look at
+# the whole token, which portable ERE cannot express.
 strike_commit_ids() {
   awk '
     function is_commit(t) {
@@ -134,53 +134,32 @@ strike_commit_ids() {
         && (t ~ /[0-9]/) && (t ~ /[a-f]/)
     }
     {
-      rest = $0; out = ""; reopened = 0
+      rest = $0; line = ""
       while (match(rest, /[0-9A-Za-z]+/)) {
-        pre = substr(rest, 1, RSTART - 1)
         tok = substr(rest, RSTART, RLENGTH)
+        line = line substr(rest, 1, RSTART - 1)
+        if (!is_commit(tok)) line = line tok
         rest = substr(rest, RSTART + RLENGTH)
-        if (length(pre) > 0) prev = substr(pre, length(pre), 1)
-        else if (length(out) > 0) prev = substr(out, length(out), 1)
-        else prev = ""
-        # A hash is struck only where the text lets one stand: at the start of
-        # the line or after a space, "(" or ",", never inside a longer word.
-        if (is_commit(tok) && (prev == "" || prev == " " || prev == "(" || prev == ",")) {
-          kept = out pre
-          tail = kept
-          sub(/^.*[0-9A-Za-z]/, "", tail)
-          head = substr(kept, 1, length(kept) - length(tail))
-          if (tail ~ /^[ ,()]*$/) {
-            brackets = tail
-            gsub(/[^()]/, "", brackets)
-            word = head
-            sub(/^.*[^0-9A-Za-z]/, "", word)
-            if (tolower(word) ~ /^(after|in|at|as|landed|commit|from|to)$/) {
-              sub(/[0-9A-Za-z]+$/, "", head)
-              sub(/[ ,]+$/, "", head)
-            }
-            # Everything the line opened with is gone: what follows becomes
-            # the sentence, and has to read like one.
-            if (head == "") reopened = 1
-            out = head (head == "" ? "" : " ") brackets
-          } else {
-            out = kept
-          }
-        } else {
-          out = out pre tok
-        }
       }
-      line = out rest
-      gsub(/[(] *(, *)*[)]/, "", line)
-      gsub(/[(] *, */, "(", line)
+      line = line rest
+      out = ""
+      while (match(line, /[(][^()]*[)]/)) {
+        out = out substr(line, 1, RSTART - 1)
+        if (substr(line, RSTART + 1, RLENGTH - 2) ~ /[0-9A-Za-z]/) out = out substr(line, RSTART, RLENGTH)
+        line = substr(line, RSTART + RLENGTH)
+      }
+      line = out line
+      gsub(/  +/, " ", line)
       gsub(/ +[.]/, ".", line)
       gsub(/ +,/, ",", line)
       gsub(/ +;/, ";", line)
       gsub(/ +:/, ":", line)
       gsub(/ +[)]/, ")", line)
-      gsub(/  +/, " ", line)
-      sub(/^[ ,]+/, "", line)
-      sub(/ +$/, "", line)
-      if (reopened) line = toupper(substr(line, 1, 1)) substr(line, 2)
+      gsub(/[(] +/, "(", line)
+      while (index(line, ",.") > 0) sub(/,[.]/, ".", line)
+      while (index(line, ",,") > 0) sub(/,,/, ",", line)
+      sub(/^[ \t]+/, "", line)
+      sub(/[ \t]+$/, "", line)
       print line
     }'
 }

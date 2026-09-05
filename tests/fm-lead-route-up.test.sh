@@ -471,6 +471,75 @@ SH
   pass "a status log recreated between the hold and the absorb is marked not at all: the carried identity belongs to the file that was judged, so the new log's first bytes stay unread and the done: line inside them still reaches First Mate"
 }
 
+# --- 5d. the hold refuses a file that changed under the span read -----------
+# The narrower window inside leader_holds_signal itself: the end and the
+# identity are taken, then the span is read. A teardown-and-respawn landing in
+# there leaves the OLD file's byte count bound to a SHORTER new log, and the
+# absorb would mark a position past its end - every line the crewmate writes
+# below it is then skipped for good. The identity is read again after the
+# span, so a file that changed under it is held not at all and marked not at
+# all, and the new log is read from its first byte at the next poll.
+test_hold_refuses_a_status_file_that_changed_under_the_span_read() {
+  local driver out held marked
+  make_home hold-swapped
+  {
+    printf '%s\n' "$DOOR"
+    printf 'working: reading the spec and the epic master plan before the first commit\n'
+    printf 'working: writing the story card and the definition of done for the branch\n'
+  } > "$STATE/c1.status"
+  run_relay -- c1
+  [ "$(door_rows c1)" = 'rung story-size' ] || fail "fixture: the door was rung to a live leader"
+  driver="$HOME_DIR/drive-swapped.sh"
+  cat > "$driver" <<'SH'
+set -u
+# shellcheck source=/dev/null
+. "$1"
+f="$STATE/c1.status"
+sf=$(fm_wake_signal_seen_path "$STATE" "$f")
+sig=$(fm_wake_signal_sig "$f")
+door=$(head -n 1 "$f")
+# The teardown-and-respawn lands between the two reads: the identity call that
+# captures the file's identity replaces it - with a shorter log of the same
+# shape - the moment it has read it, so the span and the identity read after
+# it belong to a different file.
+eval "$(declare -f status_file_identity | sed '1s/^status_file_identity/settled_status_file_identity/')"
+armed=0
+status_file_identity() {
+  local ident rc
+  ident=$(settled_status_file_identity "$@"); rc=$?
+  if [ "$armed" -eq 1 ]; then
+    armed=0
+    rm -f "$f"
+    printf '%s\n' "$door" > "$f"
+  fi
+  printf '%s' "$ident"
+  return $rc
+}
+armed=1
+if leader_holds_signal "$f"; then held=yes; else held=no; fi
+armed=0
+[ "$held" = no ] || leader_absorb_signals "$sf$(printf '\t')$sig$(printf '\t')$f$(printf '\t')$FM_HELD_SPAN_END$(printf '\t')$FM_HELD_SPAN_IDENT"
+# What the respawned crewmate writes next sits BELOW the new log's first line
+# and above the old file's byte count.
+printf 'done: PR ready, checks green
+' >> "$f"
+printf 'held=%s marked=%s size=%s
+' "$held" "$(fm_wake_signal_seen_size "$STATE" "$f")" "$(LC_ALL=C wc -c < "$f" | tr -d '[:space:]')"
+SH
+  out=$(env "${CASE_ENV[@]}" bash "$driver" "$ROOT/bin/fm-watch.sh" 2> "$HOME_DIR/driver.err") \
+    || fail "the driver must run: $out"$'\n'"$(cat "$HOME_DIR/driver.err")"
+  held=$(printf '%s' "$out" | sed -n 's/.*held=\([a-z]*\).*/\1/p')
+  marked=$(printf '%s' "$out" | sed -n 's/.*marked=\([0-9]*\).*/\1/p')
+  [ "$held" = no ] || fail "a status file replaced under the span read is held by nobody, got: $out"
+  [ "$marked" = 0 ] || fail "and nothing of it is marked classified, got: $out"
+  # And the proof it matters: the done: line the new session wrote below the
+  # old file's byte count still reaches First Mate.
+  watch_bg
+  wait_exit || fail "the new log's done: line wakes First Mate at the next poll; out:"$'\n'"$(watch_report)"
+  queue_is_signal_on c1.status || fail "with its wake record, got:"$'\n'"$(watch_report)"
+  pass "a status log replaced between the identity taken before the span and the one read after it is held not at all and marked not at all: no marker lands past the new, shorter log's end, and the done: line written below it still reaches First Mate"
+}
+
 # --- 6. the watcher: without a leader to hold it, the door surfaces ---------
 test_watcher_surfaces_when_no_leader_holds_the_door() {
   make_home dead-leader
@@ -577,6 +646,7 @@ test_relay_records_failures_without_sending
 test_watcher_absorbs_a_held_door_and_its_turn_end
 test_absorb_marks_only_the_bytes_it_judged
 test_absorb_marks_nothing_when_the_status_file_was_replaced
+test_hold_refuses_a_status_file_that_changed_under_the_span_read
 test_watcher_surfaces_when_no_leader_holds_the_door
 test_watcher_escalates_a_held_door_once_past_the_bound
 test_watcher_wakes_at_once_when_a_holding_leader_dies
