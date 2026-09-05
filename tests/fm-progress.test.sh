@@ -62,7 +62,14 @@ test_bar_renders_twenty_cells() {
   [ "$RC" -eq 1 ] && [ -z "$OUT" ] || fail "101 is refused, got rc=$RC '$OUT'"
   run_progress bar half
   [ "$RC" -eq 1 ] || fail "a word is refused"
-  pass "bar renders twenty cells from a whole percentage, rounding to the nearest cell, and refuses anything else"
+  # A percentage written with a leading zero is the same percentage.
+  run_progress bar 08
+  [ "$OUT" = "[##..................] 8%" ] || fail "08 is eight per cent, got '$OUT' ($ERR)"
+  run_progress bar 09
+  [ "$OUT" = "[##..................] 9%" ] || fail "09 is nine per cent, got '$OUT' ($ERR)"
+  run_progress bar 007
+  [ "$OUT" = "[#...................] 7%" ] || fail "007 is seven per cent, got '$OUT' ($ERR)"
+  pass "bar renders twenty cells from a whole percentage, rounding to the nearest cell, reads a leading zero as base ten, and refuses anything else"
 }
 
 test_scaffold_carries_the_six_parts() {
@@ -228,6 +235,12 @@ test_the_stripper_deletes_ids_and_never_a_word() {
   EXPECTED+=("Cut the crewmate's fresh head from 1560000 to 1400000 tokens.")
   CASES+=("The order at epoch 1757100000 was typed into the pane.")
   EXPECTED+=("The order at epoch 1757100000 was typed into the pane.")
+  CASES+=("The file bin/fm-1234abc.sh was added.")
+  EXPECTED+=("The file bin/fm-1234abc.sh was added.")
+  CASES+=("Version v1.2.3-abc1234 shipped.")
+  EXPECTED+=("Version v1.2.3-abc1234 shipped.")
+  CASES+=("The worktree under worktrees/1193994fc784 is the crewmate's own.")
+  EXPECTED+=("The worktree under worktrees/1193994fc784 is the crewmate's own.")
   CASES+=("The line was effaced by the editor.")
   EXPECTED+=("The line was effaced by the editor.")
   CASES+=("The tag 7EA43A4B is the release's, not a commit's.")
@@ -254,7 +267,7 @@ test_the_stripper_deletes_ids_and_never_a_word() {
   [ -z "$bad" ] || fail "a struck line carries no stray punctuation - no doubled space, no space before . , ; : or ), no ',.' or ',,', no empty '()' - got:"$'\n'"$bad"
   bad=$(printf '%s\n' "$done_lines" | awk '{ o = gsub(/\(/, "("); c = gsub(/\)/, ")"); if (o != c) print NR ": " $0 }')
   [ -z "$bad" ] || fail "no bracket is left without its partner, got:"$'\n'"$bad"
-  pass "the stripper deletes commit ids and the brackets they empty and never a word: ${#CASES[@]} shapes read exactly as written down, stranded introducers included, and no line carries a doubled space, a space before a stop, ',.' or ',,', an empty bracket or a bracket without its partner"
+  pass "the stripper deletes commit ids that stand on their own and the brackets they empty, and never a word or a hex run inside one: ${#CASES[@]} shapes read exactly as written down, stranded introducers included, and no line carries a doubled space, a space before a stop, ',.' or ',,', an empty bracket or a bracket without its partner"
 }
 
 test_fleet_rolls_the_leaders_bars_into_one() {
@@ -279,6 +292,12 @@ test_fleet_rolls_the_leaders_bars_into_one() {
   assert_contains "$OUT" "[################....] 80%  lead-b  Extraction of the harness." "the second leader"
   assert_contains "$OUT" "[....................]  --%  lead-c  (no saved report: data/lead-c/progress.md has no bar line)" "a leader without a report is listed and left out of the mean"
   assert_not_contains "$OUT" "c1" "a crewmate is not a leader"
+  # A saved bar written with a leading zero counts as the number it reads as.
+  printf 'Goal: The keep-set.\n\n%s\n[##..................] 08%%\n%s\n\nDONE\n- [x] one\n' "$fence" "$fence" > "$DATA/lead-c/progress.md"
+  run_progress fleet
+  assert_contains "$OUT" "Fleet: 3 epic branch leader(s), 3 with a saved report" "the third report is read"
+  assert_contains "$OUT" "[#########...........] 43%" "08 contributes 8 to the mean of 40, 80 and 8"
+  assert_contains "$OUT" "[##..................] 8%  lead-c  The keep-set." "and its own bar reads 8%"
   # A home with no leaders says so and exits 0.
   make_home none
   write_task "$HOME_DIR" u1

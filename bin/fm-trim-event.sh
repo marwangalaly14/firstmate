@@ -35,7 +35,8 @@
 #   trim before it types /compact: `ordered <epoch> <leader> <focus|->`, and
 #   `order-failed <epoch>` when the /compact provably did not reach the pane.
 #   A manual trim whose nearest earlier ledger line is a pending `ordered`
-#   line is the leader's: its record says `- ordered by: leader <id> ...` and
+#   line - pending as bin/fm-lead-lib.sh's fm_lead_pending_order reads it,
+#   the one reading this fleet has - is the leader's: its record says `- ordered by: leader <id> ...` and
 #   its index line ends in ordered:<leader>; any other manual trim says
 #   `- ordered by: nobody in the ledger`. Order lines are never counted as
 #   trims.
@@ -177,20 +178,23 @@ INDEX="$TRIMS/index"
 mkdir -p "$TRIMS" 2>/dev/null || exit 0
 last_n=0
 auto_index=0
-# A pending order: the ledger's last line is an `ordered <epoch> <leader>
-# <focus>` line bin/fm-lead.sh trim wrote before typing /compact (an
-# `order-failed` line or a trim line after it clears it).
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-lead-lib.sh
+. "$SCRIPT_DIR/fm-lead-lib.sh"
 ORDER_LEADER=
 ORDER_EPOCH=
 ORDER_FOCUS=
+if order_line=$(fm_lead_pending_order "$INDEX"); then
+  IFS=$(printf '\t') read -r ORDER_EPOCH ORDER_LEADER ORDER_FOCUS <<EOF
+$order_line
+EOF
+fi
 if [ -f "$INDEX" ]; then
-  while IFS=$(printf '\t') read -r n trig f3 f4 _rest; do
+  while IFS=$(printf '\t') read -r n trig _f3 _f4 _rest; do
     case "$n" in
-      ordered) ORDER_EPOCH=$trig; ORDER_LEADER=$f3; ORDER_FOCUS=$f4; continue ;;
-      order-failed) ORDER_LEADER=; ORDER_EPOCH=; ORDER_FOCUS=; continue ;;
       ''|*[!0-9]*) continue ;;
     esac
-    ORDER_LEADER=; ORDER_EPOCH=; ORDER_FOCUS=
     [ "$n" -gt "$last_n" ] && last_n=$n
     [ "$trig" = auto ] && auto_index=$((auto_index + 1))
   done < "$INDEX"
@@ -275,10 +279,6 @@ if [ "$TRIGGER" = auto ] && [ "$N_AUTO" -ge 2 ]; then
   sent=0
   leader_state=none
   if [ -n "$LEADER" ] && [ -f "$STATE/$LEADER.meta" ]; then
-    # shellcheck source=bin/fm-backend.sh
-    . "$SCRIPT_DIR/fm-backend.sh"
-    # shellcheck source=bin/fm-lead-lib.sh
-    . "$SCRIPT_DIR/fm-lead-lib.sh"
     leader_state=$(fm_lead_endpoint_state "$STATE/$LEADER.meta" "$LEADER" 2>/dev/null) || leader_state=unknown
     if [ "$leader_state" = alive ]; then
       if FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$LEADER" "trim event: $line" >/dev/null 2>&1; then

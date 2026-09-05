@@ -540,6 +540,65 @@ SH
   pass "a status log replaced between the identity taken before the span and the one read after it is held not at all and marked not at all: no marker lands past the new, shorter log's end, and the done: line written below it still reaches First Mate"
 }
 
+# --- 5e. the same window, one step earlier: identity, then byte count -------
+# The hold reads the identity FIRST and the byte count second. A respawn
+# landing between those two commands would otherwise bind the OLD file's byte
+# count to the NEW file - the count is taken from a handle opened on the old
+# inode, the identity read afterwards would be the new file's, and the check
+# at the end would find nothing wrong. Taking the identity first makes that
+# swap a mismatch, so nothing is held and nothing is marked.
+test_hold_refuses_a_status_file_replaced_before_the_byte_count() {
+  local driver out held marked
+  make_home hold-swapped-early
+  {
+    printf '%s\n' "$DOOR"
+    printf 'working: reading the spec and the epic master plan before the first commit\n'
+    printf 'working: writing the story card and the definition of done for the branch\n'
+  } > "$STATE/c1.status"
+  run_relay -- c1
+  [ "$(door_rows c1)" = 'rung story-size' ] || fail "fixture: the door was rung to a live leader"
+  driver="$HOME_DIR/drive-swapped-early.sh"
+  cat > "$driver" <<'SH'
+set -u
+# shellcheck source=/dev/null
+. "$1"
+f="$STATE/c1.status"
+sf=$(fm_wake_signal_seen_path "$STATE" "$f")
+sig=$(fm_wake_signal_sig "$f")
+door=$(head -n 1 "$f")
+# The teardown-and-respawn lands on the byte count: the handle is already open
+# on the old file, so the count is the old file's, while the path now holds a
+# shorter new log.
+armed=0
+wc() {
+  if [ "$armed" -eq 1 ]; then
+    armed=0
+    rm -f "$f"
+    printf '%s\n' "$door" > "$f"
+  fi
+  command wc "$@"
+}
+armed=1
+if leader_holds_signal "$f"; then held=yes; else held=no; fi
+armed=0
+[ "$held" = no ] || leader_absorb_signals "$sf$(printf '\t')$sig$(printf '\t')$f$(printf '\t')$FM_HELD_SPAN_END$(printf '\t')$FM_HELD_SPAN_IDENT"
+printf 'done: PR ready, checks green
+' >> "$f"
+printf 'held=%s marked=%s size=%s
+' "$held" "$(fm_wake_signal_seen_size "$STATE" "$f")" "$(LC_ALL=C wc -c < "$f" | tr -d '[:space:]')"
+SH
+  out=$(env "${CASE_ENV[@]}" bash "$driver" "$ROOT/bin/fm-watch.sh" 2> "$HOME_DIR/driver.err") \
+    || fail "the driver must run: $out"$'\n'"$(cat "$HOME_DIR/driver.err")"
+  held=$(printf '%s' "$out" | sed -n 's/.*held=\([a-z]*\).*/\1/p')
+  marked=$(printf '%s' "$out" | sed -n 's/.*marked=\([0-9]*\).*/\1/p')
+  [ "$held" = no ] || fail "a status file replaced before the byte count is held by nobody, got: $out"
+  [ "$marked" = 0 ] || fail "and nothing of it is marked classified, got: $out"
+  watch_bg
+  wait_exit || fail "the new log's done: line wakes First Mate at the next poll; out:"$'\n'"$(watch_report)"
+  queue_is_signal_on c1.status || fail "with its wake record, got:"$'\n'"$(watch_report)"
+  pass "a status log replaced between the identity read and the byte count is held not at all and marked not at all: the old file's count is never bound to the new file, and the done: line the new session writes still reaches First Mate"
+}
+
 # --- 6. the watcher: without a leader to hold it, the door surfaces ---------
 test_watcher_surfaces_when_no_leader_holds_the_door() {
   make_home dead-leader
@@ -647,6 +706,7 @@ test_watcher_absorbs_a_held_door_and_its_turn_end
 test_absorb_marks_only_the_bytes_it_judged
 test_absorb_marks_nothing_when_the_status_file_was_replaced
 test_hold_refuses_a_status_file_that_changed_under_the_span_read
+test_hold_refuses_a_status_file_replaced_before_the_byte_count
 test_watcher_surfaces_when_no_leader_holds_the_door
 test_watcher_escalates_a_held_door_once_past_the_bound
 test_watcher_wakes_at_once_when_a_holding_leader_dies

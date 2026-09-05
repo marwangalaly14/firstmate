@@ -25,6 +25,17 @@
 #           or as much spent since its last change). A candidate, never a
 #           verdict: the leader confirms it against the acceptance criteria.
 #           Signature: the commit and the logbook change it measures from.
+#   trim-order  the crewmate's trim ledger carries an order its leader gave
+#           (bin/fm-lead.sh trim) that nothing has answered - no trim event
+#           and no order-failed line - and the order is FM_LEAD_ORDER_STALE_SECS
+#           (430) old or older: the ordered trim never happened, so nobody
+#           carried the crewmate on. 430 is twice the longest compaction
+#           measured on this fleet (215 s, recorded in docs/branch-leader.md),
+#           so an ordinary slow trim is never called stale. Pending is read
+#           by bin/fm-lead-lib.sh's fm_lead_pending_order, the one reading of
+#           it this fleet has. Signature: the order's epoch, so one order
+#           rings once; a trim line or an order-failed line ends the episode
+#           by clearing the order.
 # Each signal rings the leader named by state/<task-id>.meta's leader= line
 # once per episode: the ledger data/<task-id>/signals/index takes one row per
 # signal and signature -
@@ -51,7 +62,7 @@
 # to stderr. FM_STATE_OVERRIDE and FM_DATA_OVERRIDE point the directories
 # elsewhere for tests, exactly as for the card; FM_VITALS_NOW fixes its clock.
 # Reads: state/<task-id>.meta, state/<leader>.meta, the card's inputs,
-# data/<task-id>/signals/index. Writes: data/<task-id>/signals/{index,.lock};
+# data/<task-id>/trims/index, data/<task-id>/signals/index. Writes: data/<task-id>/signals/{index,.lock};
 # the leader's inbox.
 set -u
 
@@ -80,9 +91,13 @@ STUCK_SECS=${FM_STUCK_CALL_SECS:-900}
 case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=900 ;; esac
 DRIFT_TOKENS=${FM_DRIFT_TOKENS:-40000}
 case "$DRIFT_TOKENS" in ''|*[!0-9]*) DRIFT_TOKENS=40000 ;; esac
+ORDER_STALE_SECS=${FM_LEAD_ORDER_STALE_SECS:-430}
+case "$ORDER_STALE_SECS" in ''|*[!0-9]*) ORDER_STALE_SECS=430 ;; esac
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-lead-lib.sh
+. "$SCRIPT_DIR/fm-lead-lib.sh"
 
 [ -f "$META" ] || exit 0
 LEADER=$(fm_meta_get "$META" leader 2>/dev/null) || LEADER=
@@ -92,9 +107,19 @@ command -v jq >/dev/null 2>&1 || { echo "error: jq is required to read a card" >
 card=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-vitals.sh" "$ID" --json 2>/dev/null) || card=
 [ -n "$card" ] || exit 0
 
-# The three readings, as <signal>\t<signature>\t<summary> lines; the shell
+ORDER_EPOCH=
+ORDER_LEADER=
+if order_line=$(fm_lead_pending_order "$DATA/$ID/trims/index"); then
+  IFS=$(printf '\t') read -r ORDER_EPOCH ORDER_LEADER _ORDER_FOCUS <<EOF
+$order_line
+EOF
+  case "$ORDER_EPOCH" in ''|*[!0-9]*) ORDER_EPOCH= ;; esac
+fi
+
+# The four readings, as <signal>\t<signature>\t<summary> lines; the shell
 # only records and rings.
-signals=$(printf '%s' "$card" | jq -r --argjson stuck "$STUCK_SECS" --argjson drift "$DRIFT_TOKENS" '
+signals=$(printf '%s' "$card" | jq -r --argjson stuck "$STUCK_SECS" --argjson drift "$DRIFT_TOKENS" \
+  --argjson stale "$ORDER_STALE_SECS" --arg order_epoch "$ORDER_EPOCH" --arg order_leader "$ORDER_LEADER" '
   # The card'"'"'s own number and age shapes (k_of, age_of in bin/fm-crew-vitals.sh).
   def k: if . == null then "?"
     elif . >= 9950 then ((((. + 500) / 1000) | floor | tostring) + "K")
@@ -118,6 +143,11 @@ signals=$(printf '%s' "$card" | jq -r --argjson stuck "$STUCK_SECS" --argjson dr
        "drift?\t" + ((.commit_epoch // 0) | tostring) + "/" + ((.logbook_epoch // 0) | tostring) + "\t" + (.spend_since_commit | k)
        + " tokens since the last commit (" + (.commit_age | age) + ") with no logbook change over that spend (bound " + ($drift | k)
        + "; logbook " + (if .logbook == "written" then ((.logbook_age | age) + " old") else .logbook end) + ")"
+     else empty end),
+    (if $order_epoch != "" and .now != null and (.now - ($order_epoch | tonumber)) >= $stale then
+       ((.now - ($order_epoch | tonumber)) as $age
+        | "trim-order\t" + $order_epoch + "\tan ordered trim never happened: leader " + $order_leader
+          + " ordered it " + ($age | age) + " ago and no trim event has arrived since (bound " + ($stale | age) + ")")
      else empty end)
   ] | .[]' 2>/dev/null) || signals=
 [ -n "$signals" ] || exit 0
@@ -164,8 +194,6 @@ read_leader() {
     leader_state=no-record
     return 0
   fi
-  # shellcheck source=bin/fm-lead-lib.sh
-  . "$SCRIPT_DIR/fm-lead-lib.sh"
   leader_state=$(fm_lead_endpoint_state "$STATE/$LEADER.meta" "$LEADER" 2>/dev/null) || leader_state=unknown
   [ -n "$leader_state" ] || leader_state=unknown
 }
@@ -177,6 +205,7 @@ read_card_text() {
   [ -n "$card_text" ] || card_text="(the card could not be read: FM_HOME=$FM_HOME bin/fm-crew-vitals.sh $ID)"
 }
 
+how=
 while IFS=$'\t' read -r signal signature summary; do
   [ -n "$signal" ] || continue
   if episode_recorded "$signal" "$signature"; then
@@ -187,9 +216,13 @@ while IFS=$'\t' read -r signal signature summary; do
   result="failed:leader-$leader_state"
   if [ "$leader_state" = alive ]; then
     read_card_text
+    case "$signal" in
+      trim-order) how="Mechanical, from the crewmate's own trim ledger, never from what it says; the judgment is yours. Look at the pane: if the crewmate sits at its prompt the trim never ran, so order it again - FM_HOME=$FM_HOME bin/fm-lead.sh trim --leader $LEADER $ID \"<focus>\"; if it is working, leave it. Nobody else is told." ;;
+      *) how="Mechanical, from the transcript, never from the crewmate's report; the judgment is yours. Look at the pane and the logbook, then steer if the work is off: FM_HOME=$FM_HOME bin/fm-lead.sh steer --leader $LEADER $ID \"<one line>\". Nobody else is told." ;;
+    esac
     text="signal: $ID $signal: $summary
 $card_text
-Mechanical, from the transcript, never from the crewmate's report; the judgment is yours. Look at the pane and the logbook, then steer if the work is off: FM_HOME=$FM_HOME bin/fm-lead.sh steer --leader $LEADER $ID \"<one line>\". Nobody else is told."
+$how"
     if FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$LEADER" "$text" >/dev/null 2>&1; then
       result=rung
     else

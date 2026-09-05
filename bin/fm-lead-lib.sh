@@ -53,6 +53,12 @@
 # fm_lead_lock_path <state-dir> <leader-id>
 #   Prints the per-leader lock directory the spawn holds from its count to its
 #   publication.
+# fm_lead_pending_order <trims-index-file>
+#   Prints "<epoch>\t<leader>\t<focus>" and returns 0 when the crewmate's trim
+#   ledger ends in an order its leader gave that nothing has answered;
+#   returns 1 when none stands. This is the one reading of "pending": the
+#   crewmate's hook spends the order by it, and the signals check rings the
+#   leader by it when no trim ever arrives.
 
 FM_LEAD_MAX_CREW=4
 
@@ -137,4 +143,23 @@ fm_lead_check_chain() {  # <state-dir> <leader-id> <new-id>
 
 fm_lead_lock_path() {  # <state-dir> <leader-id>
   printf '%s/.lead-%s.lock\n' "$1" "$2"
+}
+
+# An order stands in data/<id>/trims/index as `ordered <epoch> <leader>
+# <focus>`, written by bin/fm-lead.sh trim before it types /compact. A
+# numbered trim line after it answers it; an `order-failed` line abandons it.
+# Any other line (a `steer-failed` row) leaves it standing.
+fm_lead_pending_order() {  # <trims-index-file>
+  local index=$1 n trig f3 f4 _rest epoch='' leader='' focus=''
+  [ -f "$index" ] || return 1
+  while IFS=$(printf '\t') read -r n trig f3 f4 _rest; do
+    case "$n" in
+      ordered) epoch=$trig; leader=$f3; focus=$f4; continue ;;
+      order-failed) epoch=''; leader=''; focus=''; continue ;;
+      ''|*[!0-9]*) continue ;;
+    esac
+    epoch=''; leader=''; focus=''
+  done < "$index"
+  [ -n "$leader" ] || return 1
+  printf '%s\t%s\t%s\n' "$epoch" "$leader" "$focus"
 }

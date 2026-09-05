@@ -1384,9 +1384,12 @@ EOF
 # is not rung again): the hook may not have run yet, or the crewmate may not
 # have one, and either way the ledger then says rung or why not before the
 # hold is judged.
-# The end of the span AND the file's identity are taken ONCE, together, before
-# the span is read; the identity is read again AFTER the span and must match,
-# or nothing is held and nothing is marked for that file, the way
+# In order: the file's identity is read FIRST, then the end of the span, then
+# the span itself, then the identity again - and the two identities must
+# match, or nothing is held and nothing is marked for that file. A file
+# recreated anywhere in that window is caught, including between the identity
+# and the byte count, where a swap would otherwise bind the old file's count
+# to the new file. It is the way
 # status_span_first_actionable_record in bin/fm-classify-lib.sh refuses a span
 # whose file changed under it. What survives both reads is published in
 # FM_HELD_SPAN_END and FM_HELD_SPAN_IDENT for the caller to carry to
@@ -1414,9 +1417,9 @@ leader_holds_signal() {  # <status-or-turn-ended-file>
       task_leader_alive "$task" >/dev/null || return 1
       start=$(fm_wake_signal_seen_size "$STATE" "$f")
       case "$start" in ''|*[!0-9]*) start=0 ;; esac
+      ident=$(status_file_identity "$f") || ident=
       end=$(LC_ALL=C wc -c < "$f" 2>/dev/null | tr -d '[:space:]')
       case "$end" in ''|*[!0-9]*) return 1 ;; esac
-      ident=$(status_file_identity "$f") || ident=
       [ "$end" -ge "$start" ] || return 1
       span=$(LC_ALL=C tail -c "+$((start + 1))" "$f" 2>/dev/null | LC_ALL=C head -c "$((end - start))") || return 1
       if [ -n "$ident" ]; then

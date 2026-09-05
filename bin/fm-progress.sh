@@ -52,6 +52,7 @@ CELLS=20
 render_bar() {  # <pct> -> [####................] 20%
   local pct=$1 filled i out='['
   case "$pct" in ''|*[!0-9]*) return 1 ;; esac
+  pct=$((10#$pct))
   [ "$pct" -le 100 ] || return 1
   filled=$(( (pct * CELLS + 50) / 100 ))
   i=0
@@ -108,7 +109,10 @@ section_lines() {  # <file> <name>
 #
 # THE RULE, and it is deliberately dumb: this deletes commit ids and nothing
 # else. It never deletes a word.
-#   (i)   every commit id goes;
+#   (i)   every commit id that stands on its own goes - one that opens the
+#         line or follows a space, "(" or "," - so a hex run inside a longer
+#         token ("bin/fm-1234abc.sh", "v1.2.3-abc1234") is part of a word and
+#         is left alone;
 #   (ii)  a bracket group left with no letter or digit inside it goes with
 #         them;
 #   (iii) punctuation and spacing are normalised, and only that: doubled
@@ -136,9 +140,13 @@ strike_commit_ids() {
     {
       rest = $0; line = ""
       while (match(rest, /[0-9A-Za-z]+/)) {
+        pre = substr(rest, 1, RSTART - 1)
         tok = substr(rest, RSTART, RLENGTH)
-        line = line substr(rest, 1, RSTART - 1)
-        if (!is_commit(tok)) line = line tok
+        if (length(pre) > 0) prev = substr(pre, length(pre), 1)
+        else if (length(line) > 0) prev = substr(line, length(line), 1)
+        else prev = ""
+        line = line pre
+        if (!is_commit(tok) || (prev != "" && prev != " " && prev != "(" && prev != ",")) line = line tok
         rest = substr(rest, RSTART + RLENGTH)
       }
       line = line rest
@@ -267,6 +275,7 @@ EOF
       report="$DATA/$id/progress.md"
       pct=
       [ ! -f "$report" ] || pct=$(sed -n 's/^\[[#.]\{20\}\] \([0-9][0-9]*\)%.*$/\1/p' "$report" | head -n 1)
+      case "$pct" in ''|*[!0-9]*) pct= ;; *) pct=$((10#$pct)) ;; esac
       if [ -n "$pct" ] && [ "$pct" -le 100 ]; then
         goal=$(sed -n 's/^Goal: //p' "$report" | head -n 1)
         rows="$rows$(render_bar "$pct")  $id  ${goal:-(no goal line)}"$'\n'
