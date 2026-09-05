@@ -58,7 +58,10 @@
 #   later --leader may name, and no trim line (below), because the epic's whole
 #   shape lives in the leader's head. Ship and scout spawns only; refused with
 #   --leader (a chain is one level deep) and with --relaunch (the record's role
-#   stands). Echoed as leads=1 on the success line.
+#   stands). Echoed as leads=1 on the success line. A leader's brief comes from
+#   fm-brief.sh --leads, which tells it to read docs/branch-leader.md before its
+#   first steer; a --leads spawn whose brief lacks that sentence is launched as
+#   given with a warning, never refused.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -2084,6 +2087,17 @@ if [ -n "$SPAWN_LEADER" ] && grep -q -x 'First Mate answers in your inbox.' "$BR
     echo "error: leader mismatch for $ID: the brief says First Mate answers its doors but this spawn passed --leader $LEADER_ARG; re-scaffold the brief with --leader $LEADER_ARG" >&2
   fi
   exit 1
+fi
+
+# A leader's brief points at the playbook. fm-brief.sh --leads appends "# You
+# lead crewmates", opening with "Read docs/branch-leader.md before your first
+# steer"; a leader spawned (or relaunched) with a brief that lacks the
+# sentence - hand-written, or scaffolded without --leads - is launched as
+# given with one warning, never refused: the brief is First Mate's to write,
+# and leads=1 in the record is what the chain checks. Measured, never
+# enforced. A spawn that does not lead has nothing to be warned about.
+if [ "$LEADS" -eq 1 ] && ! grep -q -i 'read docs/branch-leader.md before your first steer' "$BRIEF"; then
+  echo "warning: $ID is spawned as a branch leader (--leads) but its brief does not say to read docs/branch-leader.md before its first steer; scaffold it with bin/fm-brief.sh $ID <repo> --mode <mode> --leads (or --scout --leads) so the leader reads the playbook; launching as given" >&2
 fi
 
 # The brief's size is measured, never enforced: the crewmate carries the

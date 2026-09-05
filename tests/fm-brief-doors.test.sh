@@ -12,7 +12,11 @@
 # a task recorded with leads=1 in this home's state. The crewmate contract
 # paragraph says who the crewmate reports to, the landing order on a project
 # that runs the loop, and the three commands never run on a session's own
-# judgement. A secondmate charter carries none of it.
+# judgement. A secondmate charter carries none of it. --leads appends "# You
+# lead crewmates" to a ship or scout brief, opening with "Read
+# docs/branch-leader.md before your first steer"; a brief without --leads never
+# mentions the playbook, and neither does the always-loaded AGENTS.md, so the
+# playbook is read by the one crewmate whose job it is and by nobody else.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -173,10 +177,64 @@ test_no_machinery_words_and_the_charter_is_untouched() {
   pass "no ship, scout or led brief says trim, compact, context window, token, budget, ledger or telemetry; a secondmate charter carries no doors and no contract"
 }
 
+# --- 6. --leads: a leader's brief points at the playbook; nothing else does ----
+test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
+  local home id brief section first line_after_doors
+  make_home leads; home=$HOME_DIR
+  fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
+  for id_args in "l1:--mode no-mistakes" "l2:--mode direct-PR" "l3:--mode local-only" "l4:--scout"; do
+    id=${id_args%%:*}
+    # shellcheck disable=SC2086  # the args are a fixed word list
+    scaffold "$home" "$id" proj ${id_args#*:} --leads
+    [ "$RC" -eq 0 ] || fail "$id: a --leads scaffold must exit 0:"$'\n'"$OUT"
+    brief="$home/data/$id/brief.md"
+    [ "$(grep -c -x '# You lead crewmates' "$brief")" -eq 1 ] || fail "$id: exactly one leader section, got $(grep -c -x '# You lead crewmates' "$brief")"
+    section=$(awk '/^# You lead crewmates$/{f=1; print; next} f && /^# /{exit} f' "$brief")
+    first=$(printf '%s\n' "$section" | sed -n 2p)
+    case "$first" in
+      "Read docs/branch-leader.md before your first steer"*) ;;
+      *) fail "$id: the leader section opens with the trigger sentence, got: $first" ;;
+    esac
+    assert_contains "$section" "\`$ROOT/docs/branch-leader.md\`" "$id: the playbook's absolute path, so the leader can open it from its worktree"
+    assert_contains "$section" "up to four crewmates" "$id: the section says what leading is"
+    # the leader section follows the crewmate's own doors: a leader is a crewmate too
+    line_after_doors=$(awk '/^# Your story, and the two times you speak up$/{f=1; next} f && /^# /{print; exit}' "$brief")
+    [ "$line_after_doors" = "# You lead crewmates" ] || fail "$id: the leader section must follow the doors, got '$line_after_doors'"
+    [ "$(grep -o 'branch-leader.md' "$brief" | wc -l | tr -d ' ')" -eq 2 ] || fail "$id: the playbook is named twice, the trigger and the path, and nowhere else; got $(grep -o 'branch-leader.md' "$brief" | wc -l | tr -d ' ')"
+  done
+  # every brief without --leads, led or not, and the charter: not one word
+  for id_args in "n1:--mode no-mistakes" "n2:--mode direct-PR" "n3:--mode local-only" "n4:--scout" "n5:--mode no-mistakes --leader lead-a" "n6:--scout --leader lead-a"; do
+    id=${id_args%%:*}
+    # shellcheck disable=SC2086  # the args are a fixed word list
+    scaffold "$home" "$id" proj ${id_args#*:}
+    [ "$RC" -eq 0 ] || fail "$id: scaffold must exit 0:"$'\n'"$OUT"
+    brief="$home/data/$id/brief.md"
+    ! grep -q -i 'branch-leader' "$brief" || fail "$id: a brief without --leads must never mention the playbook, got: $(grep -n -i 'branch-leader' "$brief")"
+    assert_not_contains "$(cat "$brief")" "You lead crewmates" "$id: a brief without --leads has no leader section"
+  done
+  FM_SECONDMATE_CHARTER='Supervise the proj domain.' scaffold "$home" sm3 --secondmate proj
+  [ "$RC" -eq 0 ] || fail "a secondmate charter must still scaffold:"$'\n'"$OUT"
+  ! grep -q -i 'branch-leader' "$home/data/sm3/brief.md" || fail "a charter never mentions the playbook"
+  # the always-loaded rulebook does not carry it either: the playbook reaches
+  # the one crewmate whose job it is through its brief, and nobody else
+  ! grep -q 'branch-leader' "$ROOT/AGENTS.md" || fail "AGENTS.md must not name the playbook; it is the leader's brief that does: $(grep -n 'branch-leader' "$ROOT/AGENTS.md")"
+  # refusals: a led crewmate cannot lead; a charter is not a leader of this home
+  scaffold "$home" r1 proj --mode no-mistakes --leads --leader lead-a
+  [ "$RC" -ne 0 ] || fail "--leads with --leader must be refused"
+  assert_contains "$OUT" "--leads cannot be combined with --leader; a chain is one level deep" "the refusal says why"
+  [ ! -e "$home/data/r1/brief.md" ] || fail "a refused --leads scaffold leaves no brief"
+  scaffold "$home" r2 --secondmate proj --leads
+  [ "$RC" -ne 0 ] || fail "--leads on a secondmate charter must be refused"
+  assert_contains "$OUT" "--leads applies only to crewmate ship or scout briefs" "the charter refusal says where --leads applies"
+  [ ! -e "$home/data/r2/brief.md" ] || fail "a refused --leads charter leaves no brief"
+  pass "--leads appends the leader section after the doors, opening with 'Read docs/branch-leader.md before your first steer' and the playbook's absolute path, on every ship mode and the scout; no brief without --leads, led or not, nor the charter, nor AGENTS.md names the playbook; --leads with --leader and on a charter are refused"
+}
+
 test_ship_and_scout_briefs_carry_the_two_doors
 test_leader_is_named_and_must_be_a_recorded_leader
 test_crewmate_contract_paragraph
 test_identity_line_and_reading_habit
 test_no_machinery_words_and_the_charter_is_untouched
+test_leads_brief_points_at_the_playbook_and_nothing_else_does
 
 echo "# all fm-brief-doors tests passed"

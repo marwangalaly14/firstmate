@@ -7,6 +7,8 @@ Two words hold everywhere: the leader measures its crewmates from the outside an
 ## What a leader is
 
 - A leader is spawned as one: `bin/fm-spawn.sh ... --leads` records `leads=1` and leaves the harness's own trim line in place, because the epic's whole shape lives in the leader's head.
+- A leader is briefed as one: `bin/fm-brief.sh <leader-id> <repo> --mode <mode> --leads` (or `--scout --leads`) adds "# You lead crewmates" after the doors, whose first sentence is "Read docs/branch-leader.md before your first steer", with this page's path.
+  That sentence is how a leader finds this page: no other brief and no always-loaded rulebook names it, and a `--leads` spawn whose brief lacks it is launched with a warning, never refused.
 - Its crewmates are spawned under it: `bin/fm-spawn.sh ... --leader <leader-id>` records `leader=<leader-id>` in each crewmate's task record ([`bin/fm-lead-lib.sh`](../bin/fm-lead-lib.sh) owns the chain).
   The chain is one level deep: a led crewmate cannot lead, and a leader takes four crewmates at once; the spawn refuses a fifth, naming the four.
 - Each crewmate's brief is scaffolded with the same leader: `bin/fm-brief.sh <id> <repo> --mode <mode> --leader <leader-id>` names the leader as the one who answers the crewmate's doors, and the spawn refuses a brief and a `--leader` that disagree ([`bin/fm-brief.sh`](../bin/fm-brief.sh) header).

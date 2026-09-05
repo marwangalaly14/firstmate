@@ -468,6 +468,43 @@ test_lead_crew_lists_a_leaders_crewmates() {
   pass "fm-lead crew lists a leader's recorded crewmates with the digest's endpoint read and refuses guesses"
 }
 
+# --- a --leads spawn warns, never refuses, when the brief lacks the playbook line ---
+test_leads_spawn_warns_when_the_brief_lacks_the_playbook_line() {
+  local rec out status
+  rec=$(make_home leadsbrief)
+  read_home "$rec"
+  spawn_keep_brief() {  # <id> [args...]: run_spawn without rewriting the brief
+    local id=$1 wt
+    shift
+    wt="$PROJ_DIR.wt-$id"
+    git -C "$PROJ_DIR" worktree add --quiet -b "wt-$id" "$wt"
+    env FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" HOME="$HOME_DIR/user-home" CLAUDE_CONFIG_DIR='' \
+      FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+      FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" PATH="$FAKEBIN_DIR:$PATH" \
+      "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off "$@" 2>&1
+  }
+  # a hand-written brief (write_brief) says nothing about the playbook
+  out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" lead-x --leads); status=$?
+  [ "$status" -eq 0 ] || fail "a --leads spawn whose brief lacks the playbook line must still launch (exit $status)"$'\n'"$out"
+  assert_contains "$out" "warning: lead-x is spawned as a branch leader (--leads) but its brief does not say to read docs/branch-leader.md before its first steer" "the spawn warns about the missing line"
+  assert_contains "$out" "fm-brief.sh lead-x <repo> --mode <mode> --leads" "the warning names the scaffold that carries the line"
+  assert_contains "$out" "leads=1" "the success line still says leads=1"
+  grep -q -x 'leads=1' "$HOME_DIR/state/lead-x.meta" || fail "the record still says leads=1"
+  # the scaffold's own line: no warning
+  mkdir -p "$HOME_DIR/data/lead-y"
+  printf '# Task\n## Captain'"'"'s intent\nLead the epic.\n\n## Firstmate spec\nNone.\n\n# You lead crewmates\nRead docs/branch-leader.md before your first steer: it is the playbook.\n' > "$HOME_DIR/data/lead-y/brief.md"
+  out=$(spawn_keep_brief lead-y --leads); status=$?
+  [ "$status" -eq 0 ] || fail "a --leads spawn whose brief carries the line must launch (exit $status)"$'\n'"$out"
+  assert_not_contains "$out" "branch-leader.md" "no warning when the brief carries the line"
+  assert_contains "$out" "leads=1" "the success line says leads=1"
+  # a spawn that does not lead has nothing to be warned about
+  out=$(run_spawn "$HOME_DIR" "$PROJ_DIR" c1); status=$?
+  [ "$status" -eq 0 ] || fail "a plain spawn must launch (exit $status)"$'\n'"$out"
+  assert_not_contains "$out" "branch-leader.md" "a spawn without --leads never mentions the playbook"
+  pass "a --leads spawn whose brief lacks 'Read docs/branch-leader.md before your first steer' warns once, names the scaffold, and launches with leads=1; a brief carrying the line and a spawn without --leads get no warning"
+}
+
 test_leader_flag_records_leader_and_reports_it
 test_leader_equals_form_and_no_flag_leaves_meta_without_leader
 test_brief_and_spawn_must_agree_on_the_leader
@@ -477,5 +514,6 @@ test_a_led_crewmate_relaunches_under_its_recorded_leader
 test_led_crewmates_stop_hook_runs_the_door_relay
 test_fifth_crewmate_is_refused_until_one_is_torn_down
 test_lead_crew_lists_a_leaders_crewmates
+test_leads_spawn_warns_when_the_brief_lacks_the_playbook_line
 
 echo "# all fm-spawn-leader-chain tests passed"

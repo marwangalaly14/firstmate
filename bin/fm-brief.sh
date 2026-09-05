@@ -12,8 +12,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--leader <task-id>]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--leader <task-id>]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--leader <task-id>|--leads]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--leader <task-id>|--leads]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -82,6 +82,15 @@
 # home's state (bin/fm-spawn.sh --leads), and bin/fm-spawn.sh refuses a
 # spawn whose --leader disagrees with the brief. Without --leader, First
 # Mate answers. A secondmate charter takes no --leader.
+# --leads scaffolds a branch leader's brief: right after the doors it appends
+# "# You lead crewmates", whose first sentence is "Read docs/branch-leader.md
+# before your first steer", with the playbook's absolute path and what leading
+# is. That section is the only place the playbook is named: a brief without
+# --leads never mentions it, and neither does AGENTS.md, so the playbook is
+# read by the one crewmate whose job it is. Refused with --leader (a chain is
+# one level deep) and on a secondmate charter. The spawn's --leads records the
+# role; bin/fm-spawn.sh warns, never refuses, when a --leads spawn's brief
+# lacks the sentence.
 # They also carry the crewmate contract paragraph ("# Crewmate contract"):
 # report to your leader or First Mate, never the captain; on a project that
 # runs the loop, land in its order (session, push, preview, reading, the
@@ -148,6 +157,7 @@ MODE=
 MODE_SET=0
 LEADER=
 LEADER_SET=0
+LEADS=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -172,6 +182,7 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --leader) want_value=leader ;;
     --leader=*) LEADER=${a#--leader=}; LEADER_SET=1 ;;
+    --leads) LEADS=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -230,6 +241,13 @@ if [ "$LEADER_SET" -eq 1 ]; then
     echo "error: $LEADER was not spawned as a leader (--leads); a crewmate's leader must be recorded with leads=1" >&2
     exit 1
   fi
+fi
+# --leads is a ship or scout brief for a branch leader, the same refusals as
+# the spawn's --leads: a led crewmate cannot lead, and a charter is not a
+# leader of this home's crewmates.
+if [ "$LEADS" -eq 1 ]; then
+  [ "$LEADER_SET" -eq 0 ] || { echo "error: --leads cannot be combined with --leader; a chain is one level deep, so a led crewmate cannot lead" >&2; exit 1; }
+  [ "$KIND" != secondmate ] || { echo "error: --leads applies only to crewmate ship or scout briefs; a second mate leads its own home's crewmates" >&2; exit 1; }
 fi
 
 BRIEF="$DATA/$ID/brief.md"
@@ -307,6 +325,23 @@ $DOORS_ANSWER
 Read long files and long command output through a sub-agent that returns only what you asked, rather than reading them yourself.
 EOF
 DOORS_SECTION=${DOORS_SECTION%$'\n'}
+
+# A branch leader's section (--leads), appended right after the doors: a
+# leader is a crewmate too, with the same doors upward, and then the one
+# thing it must do before it steers anyone. The playbook,
+# docs/branch-leader.md, is named here and nowhere else a brief or the
+# always-loaded rulebook could reach it (tests/fm-brief-doors.test.sh keeps
+# it that way), and the sentence "Read docs/branch-leader.md before your
+# first steer" is what bin/fm-spawn.sh looks for on a --leads spawn.
+if [ "$LEADS" -eq 1 ]; then
+  IFS= read -r -d '' LEADS_SECTION <<EOF || true
+# You lead crewmates
+Read docs/branch-leader.md before your first steer: \`$FM_ROOT/docs/branch-leader.md\` is the branch leader's playbook, what you do at each of your moments as a leader (a crewmate's door, a checkpoint, a signal, a steer, the progress report) and which script does the reading.
+You brief and spawn up to four crewmates of your own, each with \`--leader $ID\`, answer their two doors in their inboxes, keep your own logbook for the epic's shape, and report to First Mate the way any crewmate does.
+EOF
+  LEADS_SECTION=${LEADS_SECTION%$'\n'}
+  DOORS_SECTION="$DOORS_SECTION"$'\n\n'"$LEADS_SECTION"
+fi
 
 # The crewmate contract, project-agnostic: who the crewmate reports to, the
 # landing order on a project that runs the loop (session, push, preview,
