@@ -200,14 +200,19 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 # The two readings of the ledger, both under the lock above. Only a delivered
 # ring closes an episode; a failure is evidence, kept once, that leaves it open.
+# The signature reaches awk through the environment, never through -v: awk
+# processes escape sequences in a -v assignment, while the row was written with
+# printf '%s' and holds the bytes literally, so a signature carrying a
+# backslash would never match itself. The signal name stays on -v; it is a
+# fixed vocabulary with no escapes in it.
 episode_closed() {  # <signal> <signature> -> 0 when a `rung` row stands
   [ -f "$LEDGER" ] || return 1
-  awk -F '\t' -v s="$1" -v g="$2" '$2 == s && $3 == g && $4 == "rung" { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
+  FM_SIG="$2" awk -F '\t' -v s="$1" '$2 == s && $3 == ENVIRON["FM_SIG"] && $4 == "rung" { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
 }
 
 failure_recorded() {  # <signal> <signature> -> 0 when a `failed:` row stands
   [ -f "$LEDGER" ] || return 1
-  awk -F '\t' -v s="$1" -v g="$2" '$2 == s && $3 == g && $4 ~ /^failed:/ { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
+  FM_SIG="$2" awk -F '\t' -v s="$1" '$2 == s && $3 == ENVIRON["FM_SIG"] && $4 ~ /^failed:/ { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
 }
 
 leader_state=none

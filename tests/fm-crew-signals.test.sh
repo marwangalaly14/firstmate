@@ -581,7 +581,62 @@ loop rung" ] || fail "the first failure and the delivery both stand, and nothing
   pass "only a delivered ring closes an episode: a dead leader's failed ring is recorded once as evidence, retried at every later check while it keeps failing, delivered to the leader once First Mate relaunches it, and silent from then on; First Mate is never woken"
 }
 
+# --- a signature carrying a backslash or a tab still closes its episode ------
+# The ledger is the only thing that says an episode is closed, and the
+# signature is ONE field of its tab-separated row. So a repeated command whose
+# text carries a literal backslash, or a tab, must be matched byte for byte and
+# must never split the row: the second check is silent, writes no second row
+# and rings nobody again, and a dead leader's evidence is still kept once.
+test_a_signature_with_an_escape_closes_its_episode() {
+  local summary id
+  make_home escapes
+
+  # A literal backslash-n in the repeated command: the transcript holds those
+  # two bytes and nothing on this path may read them as a newline.
+  plant_loop c1 'printf a\\nb >> status'
+  summary='loop 3x Bash printf a\nb >> status in the last 30 calls'
+  run_signals -- c1
+  [ "$OUT" = "loop	rung	$summary" ] || fail "a backslash-bearing loop rings, got: '$OUT' ($ERR)"
+  [ "$(ledger_count c1)" -eq 1 ] || fail "the ring writes one row, ledger has $(ledger_count c1)"
+  awk -F '\t' 'NF != 6 { exit 1 }' "$DATA/c1/signals/index" \
+    || fail "a ledger row has six tab-separated fields, got: $(cat "$DATA/c1/signals/index")"
+
+  run_signals -- c1
+  [ "$OUT" = "loop	silent	$summary" ] || fail "the same backslash signature is silent next check, got: '$OUT'"
+  [ "$(ledger_count c1)" -eq 1 ] || fail "the same episode adds no row, ledger has $(ledger_count c1)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the same episode does not ring twice, inbox has $(inbox_count lead-a)"
+
+  # A real tab in the repeated command: flattened where the signature is built,
+  # so the row it writes still has six fields and the episode still closes.
+  plant_loop c2 'printf a\tb >> status'
+  summary='loop 3x Bash printf a b >> status in the last 30 calls'
+  run_signals -- c2
+  [ "$OUT" = "loop	rung	$summary" ] || fail "a tab-bearing loop rings with a flattened subject, got: '$OUT' ($ERR)"
+  awk -F '\t' 'NF != 6 { exit 1 }' "$DATA/c2/signals/index" \
+    || fail "a tab in the subject must not split the ledger row, got: $(cat "$DATA/c2/signals/index")"
+  run_signals -- c2
+  [ "$OUT" = "loop	silent	$summary" ] || fail "the tab-bearing episode is silent next check, got: '$OUT'"
+  [ "$(ledger_count c2)" -eq 1 ] || fail "the tab-bearing episode adds no row, ledger has $(ledger_count c2)"
+  [ "$(inbox_count lead-a)" -eq 2 ] || fail "one ring each, inbox has $(inbox_count lead-a)"
+
+  # The dead-leader path keeps the same bound for both subjects: evidence once.
+  make_home escapes-dead
+  plant_loop c1 'printf a\\nb >> status'
+  plant_loop c2 'printf a\tb >> status'
+  for id in c1 c2; do
+    run_signals FM_FAKE_GONE_WINDOWS=fm-lead-a -- "$id"
+    [ "$(ledger_rows "$id")" = "loop failed:leader-dead" ] \
+      || fail "$id: the failure is recorded once, got: $(ledger_rows "$id")"
+    run_signals FM_FAKE_GONE_WINDOWS=fm-lead-a -- "$id"
+    [ "$(ledger_count "$id")" -eq 1 ] \
+      || fail "$id: a repeated failure writes no second row, ledger has $(ledger_count "$id")"
+  done
+  [ "$(inbox_count lead-a)" -eq 0 ] || fail "nothing is sent to a dead leader"
+  pass "a signature carrying a backslash or a tab is matched byte for byte: the second check is silent, writes no second row and rings nobody again, and a dead leader's evidence is still recorded exactly once"
+}
+
 test_loop_rings_once_per_episode
+test_a_signature_with_an_escape_closes_its_episode
 test_stall_rings_only_while_busy
 test_drift_candidate_rings_without_a_logbook_change
 test_unled_crewmate_never_rings

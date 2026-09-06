@@ -180,7 +180,10 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
     # The salient part of a call: the command, the file (with its offset, so a
     # big file read in chunks is not a repeat), the pattern, the prompt, else
     # the whole input. A tool description the model rewrites each time is not
-    # part of it.
+    # part of it. Every control byte in it becomes a space: this is what the
+    # repeats field carries, and bin/fm-crew-signals.sh uses that field as its
+    # loop signature - one field of a tab-separated ledger row - so a newline
+    # or a tab inside it would split the row and the episode could never close.
     def salient(t):
       (t.input // {}) as $i
       | if ($i.command? // null) != null then ($i.command | tostring)
@@ -188,7 +191,7 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
         elif ($i.pattern? // null) != null then ($i.pattern | tostring)
         elif ($i.prompt? // null) != null then ($i.prompt | tostring)
         else ($i | tojson) end
-      | gsub("\n"; " ");
+      | gsub("[[:cntrl:]]"; " ");
     def sig(t): (t.name // "?") + " " + salient(t);
     def file_of(t): ((t.input // {}).file_path // "") | tostring;
     def short(t): salient(t) | .[0:60];
