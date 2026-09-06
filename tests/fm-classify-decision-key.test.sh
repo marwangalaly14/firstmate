@@ -143,16 +143,118 @@ test_mid_note_prose_mention_is_not_a_stated_key() {
   pass "a [key=x] mentioned mid-note is prose, never an opened or closed key"
 }
 
-test_malformed_stated_key_never_collapses_to_default() {
-  local dir
-  dir=$(case_dir malformed)
-  # A stated-but-invalid slug is rejected in BOTH positions - identically,
-  # and never rewritten into the shared default bucket.
-  printf 'needs-decision [key=bad key]: before-colon malformed\n' > "$dir/before.status"
-  printf 'needs-decision: [key=bad key] colon-first malformed\n' > "$dir/after.status"
-  assert_fold "$dir/before.status" "" "malformed before-colon key"
-  assert_fold "$dir/after.status" "" "malformed colon-first key"
-  pass "a malformed stated key is rejected in both positions, never folded as default"
+# An unusable stated key used to fold to NOTHING: the line was skipped, so a
+# worker that mistyped a key asked the captain a question that reached no one,
+# and nothing anywhere said so. That is this epic's own defect class - a guard
+# whose failure path silences the thing it guards. The refusal itself stands
+# (an unusable key is never rewritten into the shared "default" bucket, where a
+# stranger's bare "resolved:" would close a decision it was never told about),
+# but it is now LOUD: the decision opens under a derived key that names the
+# fault and carries the worker's own words to whoever reads the open set.
+# The record's own text is asserted by property - it must name the refused key
+# and keep the question - rather than by pinning the sentence, so rewording the
+# refusal stays free while dropping either half goes red.
+_unusable_record_key() {  # <fold output> -> the record's key column
+  printf '%s' "${1%%$'\t'*}"
+}
+_unusable_record_note() {  # <fold output> -> the record's note column
+  printf '%s' "${1#*$'\t'*$'\t'}"
+}
+
+test_an_unusable_stated_key_is_refused_out_loud() {
+  local dir f open key note
+  dir=$(case_dir unusable)
+  # The same unusable slug in BOTH documented positions, and under both
+  # opening verbs.
+  printf 'needs-decision [key=bad key]: pick REST or RPC\n' > "$dir/before.status"
+  printf 'needs-decision: [key=bad key] pick REST or RPC\n' > "$dir/after.status"
+  printf 'blocked [key=bad key]: pick REST or RPC\n' > "$dir/blocked.status"
+
+  for f in before after blocked; do
+    open=$(status_open_decisions "$dir/$f.status")
+    [ -n "$open" ] \
+      || fail "$f: an unusable key folded to nothing - the question went silent"
+    key=$(_unusable_record_key "$open")
+    [ "$key" = 'unusable-key-bad_key' ] \
+      || fail "$f: the unusable key folded under '$key', want 'unusable-key-bad_key'"
+    note=$(_unusable_record_note "$open")
+    case "$note" in
+      *'bad key'*) ;;
+      *) fail "$f: the record never names the key that was refused: '$note'" ;;
+    esac
+    case "$note" in
+      *'pick REST or RPC'*) ;;
+      *) fail "$f: the worker's own question is missing from the record: '$note'" ;;
+    esac
+    # And the incremental fold must reach the same record, as for any other key.
+    assert_fold "$dir/$f.status" "$open" "$f unusable key"
+  done
+
+  # A line that is not a decision transition still manufactures nothing, key or
+  # no key: the loud refusal covers unanswerable questions, not ordinary status.
+  printf 'working [key=bad key]: carrying on\n' > "$dir/working.status"
+  assert_fold "$dir/working.status" "" "an unusable key on an ordinary status line"
+  pass "an unusable stated key opens the decision under a key naming the fault, carrying the worker's own question, instead of being dropped in silence"
+}
+
+test_an_unusable_key_is_still_not_default_and_still_rings_no_door() {
+  local dir open key
+  dir=$(case_dir unusable-close)
+
+  # It is NOT the default bucket: a bare keyless resolution closes "default"
+  # and leaves the refused record standing, exactly as it would for any other
+  # stated key.
+  printf 'needs-decision [key=bad key]: pick REST or RPC\n' > "$dir/t.status"
+  printf 'needs-decision: which color\n' >> "$dir/t.status"
+  printf 'resolved: went with blue\n' >> "$dir/t.status"
+  open=$(status_open_decisions "$dir/t.status")
+  key=$(_unusable_record_key "$open")
+  [ "$key" = 'unusable-key-bad_key' ] \
+    || fail "a bare resolution closed or renamed the refused record: got '$open'"
+  case "$open" in
+    *$'\n'*) fail "a bare resolution left more than the refused record open: '$open'" ;;
+  esac
+
+  # And it closes the way every other key closes: a resolution stating the same
+  # unusable slug derives the same key, so a worker that mistypes a key the
+  # same way twice still closes its own decision.
+  printf 'resolved [key=bad key]: went with REST\n' >> "$dir/t.status"
+  assert_fold "$dir/t.status" "" "a resolution stating the same unusable key"
+
+  # Two differently unusable slugs are two records, not one.
+  printf 'needs-decision [key=bad key]: first\n' > "$dir/two.status"
+  printf 'needs-decision [key=worse key]: second\n' >> "$dir/two.status"
+  open=$(status_open_decisions "$dir/two.status")
+  case "$open" in
+    *'unusable-key-bad_key'*'unusable-key-worse_key'*) ;;
+    *) fail "two unusable keys collapsed into one record: '$open'" ;;
+  esac
+
+  # The derived key is bounded and holds nothing outside the key charset. A
+  # slug carrying a TAB is the case that matters: the fold's own record is TAB
+  # separated, so a raw slug reaching the key column would corrupt every
+  # consumer that reads a column out of it.
+  local runaway=''
+  while [ "${#runaway}" -lt 200 ]; do runaway="$runaway a"; done
+  printf 'needs-decision [key=x\t%s]: a runaway key\n' "$runaway" > "$dir/long.status"
+  open=$(status_open_decisions "$dir/long.status")
+  key=$(_unusable_record_key "$open")
+  case "$key" in
+    *[!A-Za-z0-9._-]*) fail "the derived key carries a character no key may hold: '$key'" ;;
+  esac
+  [ "${#key}" -le 90 ] \
+    || fail "the derived key is unbounded at ${#key} characters: '$key'"
+  case "$open" in
+    *'a runaway key'*) ;;
+    *) fail "the runaway line's question was dropped: '$open'" ;;
+  esac
+
+  # No door: a door is rung by a key a sender names back, and an unusable key
+  # is exactly the one nobody can name back, so the reader outside this file
+  # still refuses it. The fold's record is what carries the question instead.
+  status_line_decision_key 'needs-decision [key=bad key]: pick REST or RPC' \
+    && fail "an unusable key was handed out as a door key"
+  pass "an unusable key stays out of the default bucket and off the doors, closes on the same unusable key, and can neither collide with another nor carry a stray character into the fold's record"
 }
 
 # A remote secondmate reply routinely prepends a "[corr=<hex>]" correlation
@@ -268,7 +370,8 @@ test_resolution_closes_across_positions
 test_blocked_is_position_tolerant_like_needs_decision
 test_two_colon_form_decisions_stay_distinct
 test_mid_note_prose_mention_is_not_a_stated_key
-test_malformed_stated_key_never_collapses_to_default
+test_an_unusable_stated_key_is_refused_out_loud
+test_an_unusable_key_is_still_not_default_and_still_rings_no_door
 test_status_line_verb_strips_every_bracket_tag_before_colon
 test_corr_and_key_tags_open_and_close_under_the_stated_key
 test_corr_only_tag_opens_as_default_like_a_bare_line

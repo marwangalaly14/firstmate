@@ -216,8 +216,26 @@ status_is_paused_or_captain_held() {  # <status-line>
 # so a summary merely MENTIONING "[key=x]" cannot open or close that decision.
 # A line with no token in either position uses the key "default", preserving
 # the historical one-open-decision-per-task behavior (a bare "resolved:" closes
-# "default"). A stated key whose slug fails the charset below is rejected (the
-# folds skip the line), never rewritten to "default".
+# "default"). A stated key whose slug fails the charset below is REFUSED as a
+# key - never rewritten to "default", where an unrelated bare "resolved:" would
+# close a decision it was never told about - but the LINE IS NOT DROPPED.
+# Dropping it is this fleet's worst failure shape and this epic's own: a worker
+# asks the captain a question, the fold never opens it, and nothing anywhere
+# says so. The refusal is therefore made loud instead of silent. The fold opens
+# the decision under a key derived from the unusable one
+# (FM_CLASSIFY_UNUSABLE_KEY_PREFIX plus the stated slug with every character
+# outside the charset replaced by "_", bounded), and prefixes the note with the
+# refusal itself, so the question and its broken key both reach whoever reads
+# the open set. The derived key is symmetric: a later resolution stating the
+# same unusable slug derives the same key and closes it, so a worker that
+# mistypes a key the same way twice still closes its own decision. Two slugs
+# differing only outside the charset derive one key and share one record; that
+# is the price of a bounded key that cannot carry a TAB into the fold's own
+# record separator, and it is paid only by lines that are already wrong.
+# No door is opened for such a line (status_line_decision_key still refuses
+# it): a door is rung by a key a sender names back, and an unusable key is
+# exactly the one nobody can name back. The fold's record carries it instead,
+# which is what reaches the captain.
 # The parsers are pure reads of a single line. Status metadata may contain any
 # number of "[name=value]" tags before the colon, in any order, so verb parsing
 # ends at the first tag rather than special-casing "[key=...]".
@@ -332,6 +350,37 @@ _fm_decision_slug_ok() {  # <slug>
     *) return 0 ;;
   esac
 }
+# The head of the key the fold gives a decision whose stated key it refuses,
+# and the bound on what follows it. The prefix is a phrase no valid slug can
+# be mistaken for at a glance, and the bound keeps one runaway status line from
+# planting an unbounded key in every consumer's open set.
+FM_CLASSIFY_UNUSABLE_KEY_PREFIX='unusable-key-'
+FM_CLASSIFY_UNUSABLE_KEY_MAX=64
+# The two halves of the sentence the fold puts in FRONT of such a note. They
+# stand before the worker's own words on purpose: a reader scanning open
+# decisions sees the fault first and the question immediately after, and no
+# consumer has to know this rule to show it.
+FM_CLASSIFY_UNUSABLE_KEY_HEAD='[UNUSABLE DECISION KEY '
+FM_CLASSIFY_UNUSABLE_KEY_TAIL=' - a decision key holds only letters, digits, dot, underscore and hyphen, so nothing can answer this one by key until it is asked again with a usable key]'
+
+# The safe key derived from an unusable stated slug: the prefix above, then the
+# slug with every character outside the key charset replaced by "_", bounded,
+# and "_" alone when the slug was empty. Written as a character loop rather
+# than tr so it carries no locale or external-tool dependency, and it runs only
+# on a line that already stated an unusable key.
+_fm_classify_unusable_key() {  # <raw slug> -> derived key
+  local raw=$1 out='' i=0 c
+  while [ "$i" -lt "${#raw}" ] && [ "${#out}" -lt "$FM_CLASSIFY_UNUSABLE_KEY_MAX" ]; do
+    c=${raw:$i:1}
+    case "$c" in
+      [A-Za-z0-9._-]) out="$out$c" ;;
+      *) out="${out}_" ;;
+    esac
+    i=$((i + 1))
+  done
+  [ -n "$out" ] || out='_'
+  printf '%s%s' "$FM_CLASSIFY_UNUSABLE_KEY_PREFIX" "$out"
+}
 status_line_note() {  # <status-line> -> text after the first colon, trimmed
   local n k
   case "$1" in
@@ -348,15 +397,24 @@ status_line_note() {  # <status-line> -> text after the first colon, trimmed
   fi
   printf '%s' "$n"
 }
-_fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
+# The slug a line STATES, from whichever position states it, WITHOUT judging
+# it: prints the raw slug (which may be empty or malformed) and returns 0, or
+# returns 1 when the line states no key at all. Validity is _fm_decision_key's
+# call, and the fold needs the raw slug to report what was actually typed.
+_fm_decision_raw_key() {  # <status-line> -> raw slug
   local k
   if _fm_key_before_colon "$1"; then
     k=${1%%:*}
     k=${k#*\[key=}
     k=${k%%\]*}
-  else
-    k=$(_fm_key_at_note_head "$1") || { printf 'default'; return 0; }
+    printf '%s' "$k"
+    return 0
   fi
+  _fm_key_at_note_head "$1"
+}
+_fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
+  local k
+  k=$(_fm_decision_raw_key "$1") || { printf 'default'; return 0; }
   _fm_decision_slug_ok "$k" || return 1
   printf '%s' "$k"
 }
@@ -432,7 +490,7 @@ _fm_decision_key_transition_allowed() {  # <key> <note>
 }
 
 _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb>
-  local open=$1 line=$2 resolve=$3 held=$4 verb key note
+  local open=$1 line=$2 resolve=$3 held=$4 verb key note raw
   # Blank-line guard. A `case` glob answers "does this line hold any non-space
   # character" in one pattern match; the equivalent ${line//[[:space:]]/} costs
   # tens of milliseconds per line under bash 3.2's global bracket-class
@@ -443,12 +501,23 @@ _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb
     *) printf '%s' "$open"; return 0 ;;
   esac
   verb=$(status_line_verb "$line")
-  key=$(_fm_decision_key "$line") || { printf '%s' "$open"; return 0; }
-  _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")" \
+  note=$(status_line_note "$line")
+  if ! key=$(_fm_decision_key "$line"); then
+    # The line states a key this fold cannot accept. Refuse the KEY - it never
+    # becomes "default" and never rings a door - but say so where it will be
+    # read, rather than dropping a question the captain is owed.
+    case "$verb" in
+      needs-decision|blocked|"$resolve"|"$held") ;;
+      *) printf '%s' "$open"; return 0 ;;
+    esac
+    raw=$(_fm_decision_raw_key "$line") || raw=''
+    key=$(_fm_classify_unusable_key "$raw")
+    note="$FM_CLASSIFY_UNUSABLE_KEY_HEAD\"$raw\"$FM_CLASSIFY_UNUSABLE_KEY_TAIL $note"
+  fi
+  _fm_decision_key_transition_allowed "$key" "$note" \
     || { printf '%s' "$open"; return 0; }
   case "$verb" in
     needs-decision|blocked)
-      note=$(status_line_note "$line")
       open=$(_fm_decision_drop "$open" "$key")
       [ -n "$open" ] && open="${open}"$'\n'
       open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
