@@ -166,7 +166,9 @@ test_the_captains_words_land_only_when_the_brief_carries_them() {
 # check is that the WHOLE outgoing message stands, contiguous, inside the
 # brief's "## Captain's intent" - anything added, before or after, puts the
 # message outside the section and is refused. The minimum length is what stops
-# a bare word standing in that section from opening the channel by itself.
+# a bare word or another short degenerate line standing in that section from
+# opening the channel by itself; a longer fragment of an intent line clears it
+# and lands, which is no hole, because a fragment can carry no work.
 test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it() {
   local home rec line
   make_home captain-line; home=$HOME_DIR
@@ -189,11 +191,22 @@ test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it() {
   run_send "$home" -- c1 --captain "the"
   [ "$RC" -ne 0 ] || fail "a single word of the intent section is not the captain speaking"
   run_send "$home" -- c1 --captain "Ship the smaller half"
-  [ "$RC" -ne 0 ] || fail "a fragment of a captain line must be refused"
+  [ "$RC" -ne 0 ] || fail "a fragment shorter than the minimum is refused by the minimum, like any short line"
   run_send "$home" -- c1 --captain "Yes."
   [ "$RC" -ne 0 ] || fail "a line too short to be an utterance cannot open the channel"
   [ "$(records "$home" c1)" -eq 1 ] || fail "not one refusal wrote a record, got $(records "$home" c1)"
-  pass "--captain carries the captain's words and nothing else: a whole intent line alone lands, the same line with work appended or a frame around it is refused, and a word, a fragment and a line too short to be an utterance are refused with nothing written"
+  # And what the minimum does NOT do, said plainly rather than left to a name:
+  # a fragment long enough to be an utterance clears it and lands. That is no
+  # hole - the containment is the mechanism, and the fragment carries no work,
+  # because a single word added to it puts the message outside the section.
+  run_send "$home" -- c1 --captain "Ship the smaller half first, the rest"
+  [ "$RC" -eq 0 ] || fail "a fragment past the minimum still stands inside the section, so it lands: $ERR"
+  [ "$(records "$home" c1)" -eq 2 ] || fail "and writes its record, got $(records "$home" c1)"
+  assert_contains "$(record_header "$home/state/c1.inbox/002.msg")" "mark=captain" "carrying the captain mark"
+  run_send "$home" -- c1 --captain "Ship the smaller half first, the rest of the retry loop"
+  [ "$RC" -ne 0 ] || fail "a word of its own added to that fragment puts it outside the section and is refused"
+  [ "$(records "$home" c1)" -eq 2 ] || fail "and writes no record, got $(records "$home" c1)"
+  pass "--captain carries the captain's words and nothing else: a whole intent line alone lands, the same line with work appended or a frame around it is refused, and a word or any line too short to be an utterance is refused with nothing written - while a fragment past the minimum lands and still carries no work, since a word added to it falls outside the section"
 }
 
 # --- 4. lifecycle marks, --key, and one mark at a time ------------------------

@@ -210,8 +210,12 @@
 #                         the captain's words are the whole message or they are
 #                         not the captain speaking: nothing may ride along with
 #                         a quoted captain line, since anything added puts the
-#                         message outside the section. The minimum keeps a word
-#                         or a fragment from opening the channel by itself.
+#                         message outside the section. The minimum keeps a
+#                         short degenerate line standing in that section
+#                         ("None.", "The") from opening the channel by itself;
+#                         a longer fragment of an intent line does clear it,
+#                         and that is no hole, because the containment is the
+#                         mechanism and a fragment can carry no work.
 #   --lifecycle <action>  relaunch, teardown, handover or escalation; the
 #                         action rides in the mark, so an escalated door (the
 #                         watcher's 30-minute wake, or the leader dead) is
@@ -657,9 +661,13 @@ case "$LED_MARK" in
       exit 1
     fi
     LED_BRIEF="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md"
-    # The minimum's only job is to refuse a word or a fragment, never to
-    # measure the message: a short degenerate line in an intent section
-    # ("None.", "The") must not be able to open the channel by itself.
+    # The minimum's only job is to refuse a short degenerate line, never to
+    # measure the message: a line like "None." or "The" standing in an intent
+    # section must not be able to open the channel by itself. A longer
+    # fragment of an intent line clears it and lands - the containment above,
+    # not this length, is the mechanism the captain required, and a fragment
+    # carries no work, because anything appended to it puts the message
+    # outside the section.
     FM_SEND_CAPTAIN_MIN_LINE=24
     LED_INTENT=$(awk '/^## Captain'"'"'s intent$/{f=1; next} f && /^#/{exit} f' "$LED_BRIEF" 2>/dev/null || true)
     LED_CAPTAIN_MSG="$*"

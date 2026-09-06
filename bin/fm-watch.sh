@@ -1262,6 +1262,13 @@ signal_files_actionable() {  # <status-file> ...
 # ring failed, or when the span carries any other captain-relevant line. An
 # unled crewmate never enters this path, and nothing here reaches the
 # crewmate.
+# What the per-poll pass over the ledgers may READ is bounded by the ledgers
+# themselves: a crewmate's status log - the unbounded input, folded whole - is
+# read only when that crewmate's own ledger still shows a door rung, which is
+# the only state either loop acts on. It has to be, because bin/fm-teardown.sh
+# leaves both data/<id>/doors/ and state/<id>.status behind while the meta
+# record goes, so the set of crewmates walked here grows for the life of the
+# home and never shrinks.
 # The chain's other ring, the transcript signals: once per
 # FM_SIGNAL_CHECK_SECS (300) per led crewmate, the poll runs
 # bin/fm-crew-signals.sh, which reads the crewmate's card (the transcript,
@@ -1336,6 +1343,28 @@ door_key_read() {  # <task> <key>
   done < "$ledger"
   case "$DOOR_ROW_EPOCH" in ''|*[!0-9]*) DOOR_ROW_EPOCH=0 ;; esac
   return 0
+}
+
+# The keys of <task>'s doors ledger whose LATEST row is rung, each beside the
+# leader that row names, as "<key>\t<leader>" lines; nothing when the ledger
+# holds none. The ledger is the bounded input here - a handful of rows per
+# crewmate - so it, and never the status log beside it, decides whether a
+# crewmate's doors are worth looking at.
+door_rung_keys() {  # <task>
+  local ledger
+  ledger=$(door_ledger "$1")
+  [ -f "$ledger" ] || return 0
+  awk -F'\t' '
+    {
+      if (!($4 in seen)) { seen[$4] = ++n; order[n] = $4 }
+      state[$4] = $2
+      who[$4] = $3
+    }
+    END {
+      for (i = 1; i <= n; i++)
+        if (state[order[i]] == "rung") printf "%s\t%s\n", order[i], who[order[i]]
+    }
+  ' "$ledger" 2>/dev/null || true
 }
 
 # 0 when the ledger has a rung row for exactly this status line (tabs read as
@@ -1499,26 +1528,32 @@ EOF
 # Once per poll: every rung, still-open door wakes First Mate once when it is
 # older than the bound or when the leader holding it is no longer alive
 # (nobody holds it then), and a rung door the status log shows closed is
-# recorded as answered so it is not read again. Exits the cycle through
-# wake() on the first escalation, as every actionable wake does.
+# recorded as answered so it is not read again. Both of those act only on a
+# door whose LATEST ledger row is rung, so the ledger is read first and the
+# crewmate's status log is folded only when this crewmate still holds one:
+# that fold is the whole cost of the pass, and bin/fm-teardown.sh leaves both
+# the ledger and the status log behind when a crewmate is torn down, so the
+# set walked here only ever grows. Exits the cycle through wake() on the first
+# escalation, as every actionable wake does.
 leader_doors_overdue() {
-  local ledger task f open key _verb _note now age reason leader why
-  local _e result _leader _rest
+  local ledger task f open key _verb _note now age reason leader why rung _leader
   now=$(date +%s)
   for ledger in "$DATA"/*/doors/index; do
     [ -f "$ledger" ] || continue
     task=${ledger%/doors/index}; task=${task##*/}
+    rung=$(door_rung_keys "$task")
+    [ -n "$rung" ] || continue
     f="$STATE/$task.status"
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     open=$(status_open_decisions "$f") || continue
     # A rung door the fold no longer lists is answered: record it once.
-    while IFS=$(printf '\t') read -r _e result _leader key _rest; do
-      [ "$result" = rung ] || continue
+    while IFS=$(printf '\t') read -r key _leader; do
+      [ -n "$key" ] || continue
       case "$open" in "$key"$'\t'*|*$'\n'"$key"$'\t'*) continue ;; esac
-      door_key_read "$task" "$key"
-      [ "$DOOR_STATE" = rung ] || continue
       printf '%s\tanswered\t%s\t%s\t-\n' "$now" "$_leader" "$key" >> "$ledger" 2>/dev/null || true
-    done < "$ledger"
+    done <<EOF
+$rung
+EOF
     [ -n "$open" ] || continue
     while IFS=$(printf '\t') read -r key _verb _note; do
       [ -n "$key" ] || continue

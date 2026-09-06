@@ -238,10 +238,13 @@ test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
 # bin/fm-lead-relay.sh and bin/fm-watch.sh both gate on
 # status_line_decision_key, which refuses an unkeyed line, so a crewmate that
 # followed an unkeyed rule 6 would stop with nobody told. The proof runs on the
-# GENERATED brief - the thing that actually reaches a worker - and then feeds
-# the line that brief teaches to the reader that routes it.
+# GENERATED brief - the thing that actually reaches a worker - and feeds the
+# line that brief teaches, AS IT IS WRITTEN THERE, to the reader that routes it
+# and to the fold that opens the decision. An example is for copying, so a
+# literal copy has to work: nothing is substituted into it here but the summary
+# the crewmate would write in its place.
 test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
-  local home id brief taught line key
+  local home id brief taught line key want open log
   make_home decision; home=$HOME_DIR
   fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
   for id_args in "q1:--mode no-mistakes" "q2:--scout" "q3:--mode no-mistakes --leader lead-a" "q4:--scout --leader lead-a"; do
@@ -255,16 +258,24 @@ test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
     [ "$(grep -c 'needs-decision: ' "$brief")" -ge 2 ] || fail "$id: the brief's needs-decision instructions, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief")"
     [ "$(grep -c 'needs-decision: ' "$brief")" -eq "$(grep -c 'needs-decision: \[key=' "$brief")" ] \
       || fail "$id: needs-decision is spelled one way, the keyed one, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief" | grep -v 'key=')"
-    # And the line rule 6 teaches must actually route: fill its placeholders in
-    # and hand it to the reader the relay and the watcher key on.
+    # And the line rule 6 teaches must actually route AS IT STANDS: take its
+    # key from the brief itself, write only the summary the crewmate would
+    # write, and hand the line to the reader the relay and the watcher key on.
     taught=$(grep -o 'needs-decision: \[key=[^]]*\] {summary of options}' "$brief" | head -1)
     [ -n "$taught" ] || fail "$id: rule 6 must teach a keyed decision line, got:"$'\n'"$(grep -n 'needs-decision' "$brief")"
-    line=$(printf '%s' "$taught" | sed 's/<short-slug-you-choose>/story-shape/; s/{summary of options}/two ways to shape the split, A or B/')
+    want=${taught#*[key=}; want=${want%%]*}
+    line=$(printf '%s' "$taught" | sed 's/{summary of options}/two ways to shape the split, A or B/')
     key=$(bash -c '. "$1"; status_line_decision_key "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$line") \
-      || fail "$id: the line rule 6 teaches carries no key its leader's reader accepts: '$line'"
-    [ "$key" = story-shape ] || fail "$id: the reader must read the crewmate's own key, got '$key'"
+      || fail "$id: the key rule 6's own example carries is not one its leader's reader accepts: '$line'"
+    [ "$key" = "$want" ] || fail "$id: the reader must read the key the example shows ($want), got '$key'"
+    # And a decision must actually OPEN under it: the same whole-log fold every
+    # drain, the relay and the watcher read the open set from.
+    log="$home/data/$id/rule6.status"
+    printf '%s\n' "$line" > "$log"
+    open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+    [ "${open%%$'\t'*}" = "$want" ] || fail "$id: rule 6's example, copied as it stands, must open a decision under $want, got: '$open'"
   done
-  pass "rule 6 of every generated ship, scout and led brief asks for a keyed needs-decision line, the only shape the leader's relay and the watcher can route, and needs-decision is spelled that one way throughout the brief"
+  pass "rule 6 of every generated ship, scout and led brief teaches a needs-decision line whose key is real: copied as it stands it is accepted by the reader the relay and the watcher key on and opens a decision under that key, and needs-decision is spelled that one keyed way throughout the brief"
 }
 
 test_ship_and_scout_briefs_carry_the_two_doors
