@@ -546,7 +546,9 @@ The report is the only thing that survives, so anything worth keeping must be in
    append \`needs-decision: [key=decision] {summary of options}\` and stop. $REPLIER.
    Name a more specific key of your own instead - \`[key=story-size]\` - when more than one decision is open at once.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: [key=decision] {how it cleared}\` yourself as you resume, always carrying the exact key you opened it under (\`[key=stuck]\` for a blocker).
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, close it yourself as you resume, with the line for the door YOU opened and its exact key:
+   \`resolved: [key=decision] {how it cleared}\` closes a decision opened under \`[key=decision]\`, and \`resolved: [key=stuck] {how it cleared}\` closes a blocker opened under \`[key=stuck]\`.
+   A closing line carrying the other door's key closes nothing: your door stays open, and whoever answered you is then reported as having ignored a question they answered.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: [key=stuck] {the daemon error}\` and stop; only firstmate manages the daemon.
@@ -635,7 +637,9 @@ $RULE1
    Name a more specific key of your own instead - \`[key=story-size]\` - when more than one decision is open at once.
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: [key=decision] {how it cleared}\` yourself as you resume, always carrying the exact key you opened it under (\`[key=stuck]\` for a blocker).
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, close it yourself as you resume, with the line for the door YOU opened and its exact key:
+   \`resolved: [key=decision] {how it cleared}\` closes a decision opened under \`[key=decision]\`, and \`resolved: [key=stuck] {how it cleared}\` closes a blocker opened under \`[key=stuck]\`.
+   A closing line carrying the other door's key closes nothing: your door stays open, and whoever answered you is then reported as having ignored a question they answered.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: [key=stuck] {the daemon error}\` and stop; only firstmate manages the daemon.

@@ -244,8 +244,41 @@ test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
 # and to the fold that holds the open set. An example is for copying, so a
 # literal copy has to work end to end: nothing is substituted into either line
 # here but the words the crewmate would write in its own place.
-test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
-  local home id brief taught line key want open log closing
+# The opening line the GENERATED brief teaches for one door, and the closing
+# line it teaches FOR THAT DOOR'S KEY. Read out of the brief rather than
+# written here, so the test can only ever prove what the brief actually shows,
+# and the closing line is found by the key its own door names - never by
+# position, or the decision's line would answer for the blocker's too.
+_taught_open() {  # <brief> <verb> <placeholder> -> the opening line
+  grep -o "$2: \[key=[^]]*\] $3" "$1" | head -1
+}
+_taught_close() {  # <brief> <key> -> the closing line shown for that key
+  grep -o "resolved: \[key=$2\] {how it cleared}" "$1" | head -1
+}
+
+# One taught pair, PROVED BY RUNNING it: the opening line goes to the reader
+# the relay and the watcher key on, then to the whole-log fold every drain
+# reads the open set from; the OTHER door's closing line must leave it open,
+# which is the copy-and-paste trap made red; only its own closing line closes
+# it. Nothing here matches text against the document.
+_run_taught_pair() {  # <id> <door> <open line> <key> <own closing line> <other closing line> <log>
+  local id=$1 door=$2 line=$3 want=$4 own=$5 other=$6 log=$7 key open
+  key=$(bash -c '. "$1"; status_line_decision_key "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$line") \
+    || fail "$id/$door: the key the brief's own example carries is not one its leader's reader accepts: '$line'"
+  [ "$key" = "$want" ] || fail "$id/$door: the reader must read the key the example shows ($want), got '$key'"
+  printf '%s\n' "$line" > "$log"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+  [ "${open%%$'\t'*}" = "$want" ] || fail "$id/$door: the example, copied as it stands, must open a door under $want, got: '$open'"
+  printf '%s\n' "$other" >> "$log"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+  [ "${open%%$'\t'*}" = "$want" ] || fail "$id/$door: the other door's closing line must close nothing here - $want must still be open, got: '$open'"
+  printf '%s\n' "$own" >> "$log"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+  [ -z "$open" ] || fail "$id/$door: the closing line the brief shows for $want, copied as it stands, must close the door its own opening line opened, still open: '$open'"
+}
+
+test_rule_six_teaches_both_doors_and_a_closing_line_for_each() {
+  local home id brief d_open d_key d_close b_open b_key b_close
   make_home decision; home=$HOME_DIR
   fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
   for id_args in "q1:--mode no-mistakes" "q2:--scout" "q3:--mode no-mistakes --leader lead-a" "q4:--scout --leader lead-a"; do
@@ -259,33 +292,32 @@ test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
     [ "$(grep -c 'needs-decision: ' "$brief")" -ge 2 ] || fail "$id: the brief's needs-decision instructions, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief")"
     [ "$(grep -c 'needs-decision: ' "$brief")" -eq "$(grep -c 'needs-decision: \[key=' "$brief")" ] \
       || fail "$id: needs-decision is spelled one way, the keyed one, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief" | grep -v 'key=')"
-    # And the line rule 6 teaches must actually route AS IT STANDS: take its
-    # key from the brief itself, write only the summary the crewmate would
-    # write, and hand the line to the reader the relay and the watcher key on.
-    taught=$(grep -o 'needs-decision: \[key=[^]]*\] {summary of options}' "$brief" | head -1)
-    [ -n "$taught" ] || fail "$id: rule 6 must teach a keyed decision line, got:"$'\n'"$(grep -n 'needs-decision' "$brief")"
-    want=${taught#*[key=}; want=${want%%]*}
-    line=$(printf '%s' "$taught" | sed 's/{summary of options}/two ways to shape the split, A or B/')
-    key=$(bash -c '. "$1"; status_line_decision_key "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$line") \
-      || fail "$id: the key rule 6's own example carries is not one its leader's reader accepts: '$line'"
-    [ "$key" = "$want" ] || fail "$id: the reader must read the key the example shows ($want), got '$key'"
-    # And a decision must actually OPEN under it: the same whole-log fold every
-    # drain, the relay and the watcher read the open set from.
-    log="$home/data/$id/rule6.status"
-    printf '%s\n' "$line" > "$log"
-    open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
-    [ "${open%%$'\t'*}" = "$want" ] || fail "$id: rule 6's example, copied as it stands, must open a decision under $want, got: '$open'"
-    # And the closing line rule 6 teaches, copied the same way onto the same
-    # log, must close that same door: the pair is one worked example or it is
-    # a worse one than none, because a door left open accuses its leader.
-    closing=$(grep -o 'resolved: \[key=[^]]*\] {how it cleared}' "$brief" | head -1)
-    [ -n "$closing" ] || fail "$id: rule 6 must teach a keyed resolved line, got:"$'\n'"$(grep -n 'resolved' "$brief")"
-    printf '%s' "$closing" | sed 's/{how it cleared}/the leader chose B, one story/' >> "$log"
-    printf '\n' >> "$log"
-    open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
-    [ -z "$open" ] || fail "$id: rule 6's closing line, copied as it stands, must close the door its own opening line opened, still open: '$open'"
+    # The two doors the brief teaches, and the closing line it shows for each.
+    d_open=$(_taught_open "$brief" needs-decision '{summary of options}')
+    [ -n "$d_open" ] || fail "$id: rule 6 must teach a keyed decision line, got:"$'\n'"$(grep -n 'needs-decision' "$brief")"
+    d_key=${d_open#*[key=}; d_key=${d_key%%]*}
+    b_open=$(_taught_open "$brief" blocked '{why}')
+    [ -n "$b_open" ] || fail "$id: the brief must teach a keyed blocker line, got:"$'\n'"$(grep -n 'blocked' "$brief")"
+    b_key=${b_open#*[key=}; b_key=${b_key%%]*}
+    [ "$d_key" != "$b_key" ] || fail "$id: the decision and the blocker are two doors, both taught as '$d_key'"
+    d_close=$(_taught_close "$brief" "$d_key")
+    [ -n "$d_close" ] || fail "$id: no closing line is shown for the decision door the brief teaches ([key=$d_key]), so a reader who copies what is shown leaves it open:"$'\n'"$(grep -n 'resolved' "$brief")"
+    b_close=$(_taught_close "$brief" "$b_key")
+    [ -n "$b_close" ] || fail "$id: no closing line is shown for the blocker door the brief teaches ([key=$b_key]); a reader who copies the decision's line and stops reading leaves a blocker's door rung, and the leader is then reported as ignoring a question it answered:"$'\n'"$(grep -n 'resolved' "$brief")"
+    # And both pairs must WORK, each judged by the real reader and the real
+    # fold, with the other pair's closing line proved powerless over it.
+    _run_taught_pair "$id" decision \
+      "${d_open/\{summary of options\}/two ways to shape the split, A or B}" "$d_key" \
+      "${d_close/\{how it cleared\}/the leader chose B, one story}" \
+      "${b_close/\{how it cleared\}/the upstream release landed}" \
+      "$home/data/$id/rule6-decision.status"
+    _run_taught_pair "$id" blocker \
+      "${b_open/\{why\}/the upstream tool refuses the token twice}" "$b_key" \
+      "${b_close/\{how it cleared\}/the upstream release landed}" \
+      "${d_close/\{how it cleared\}/the leader chose B, one story}" \
+      "$home/data/$id/rule6-blocker.status"
   done
-  pass "rule 6 of every generated ship, scout and led brief teaches a decision line and a closing line whose keys are real: copied as they stand, the first is accepted by the reader the relay and the watcher key on and opens a decision, the second closes that same door, and needs-decision is spelled that one keyed way throughout the brief"
+  pass "rule 6 of every generated ship, scout and led brief shows a closing line for BOTH doors it teaches, and both pairs work when run: each opening line is accepted by the reader the relay and the watcher key on and opens its own door, the other door's closing line leaves it open, and only its own closing line closes it"
 }
 
 test_ship_and_scout_briefs_carry_the_two_doors
@@ -294,6 +326,6 @@ test_crewmate_contract_paragraph
 test_identity_line_and_reading_habit
 test_no_machinery_words_and_the_charter_is_untouched
 test_leads_brief_points_at_the_playbook_and_nothing_else_does
-test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about
+test_rule_six_teaches_both_doors_and_a_closing_line_for_each
 
 echo "# all fm-brief-doors tests passed"
