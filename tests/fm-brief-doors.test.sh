@@ -239,12 +239,13 @@ test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
 # status_line_decision_key, which refuses an unkeyed line, so a crewmate that
 # followed an unkeyed rule 6 would stop with nobody told. The proof runs on the
 # GENERATED brief - the thing that actually reaches a worker - and feeds the
-# line that brief teaches, AS IT IS WRITTEN THERE, to the reader that routes it
-# and to the fold that opens the decision. An example is for copying, so a
-# literal copy has to work: nothing is substituted into it here but the summary
-# the crewmate would write in its place.
+# PAIR of lines that brief teaches, AS THEY ARE WRITTEN THERE - the one that
+# opens the decision and the one that closes it - to the reader that routes it
+# and to the fold that holds the open set. An example is for copying, so a
+# literal copy has to work end to end: nothing is substituted into either line
+# here but the words the crewmate would write in its own place.
 test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
-  local home id brief taught line key want open log
+  local home id brief taught line key want open log closing
   make_home decision; home=$HOME_DIR
   fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
   for id_args in "q1:--mode no-mistakes" "q2:--scout" "q3:--mode no-mistakes --leader lead-a" "q4:--scout --leader lead-a"; do
@@ -274,8 +275,17 @@ test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
     printf '%s\n' "$line" > "$log"
     open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
     [ "${open%%$'\t'*}" = "$want" ] || fail "$id: rule 6's example, copied as it stands, must open a decision under $want, got: '$open'"
+    # And the closing line rule 6 teaches, copied the same way onto the same
+    # log, must close that same door: the pair is one worked example or it is
+    # a worse one than none, because a door left open accuses its leader.
+    closing=$(grep -o 'resolved: \[key=[^]]*\] {how it cleared}' "$brief" | head -1)
+    [ -n "$closing" ] || fail "$id: rule 6 must teach a keyed resolved line, got:"$'\n'"$(grep -n 'resolved' "$brief")"
+    printf '%s' "$closing" | sed 's/{how it cleared}/the leader chose B, one story/' >> "$log"
+    printf '\n' >> "$log"
+    open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+    [ -z "$open" ] || fail "$id: rule 6's closing line, copied as it stands, must close the door its own opening line opened, still open: '$open'"
   done
-  pass "rule 6 of every generated ship, scout and led brief teaches a needs-decision line whose key is real: copied as it stands it is accepted by the reader the relay and the watcher key on and opens a decision under that key, and needs-decision is spelled that one keyed way throughout the brief"
+  pass "rule 6 of every generated ship, scout and led brief teaches a decision line and a closing line whose keys are real: copied as they stand, the first is accepted by the reader the relay and the watcher key on and opens a decision, the second closes that same door, and needs-decision is spelled that one keyed way throughout the brief"
 }
 
 test_ship_and_scout_briefs_carry_the_two_doors

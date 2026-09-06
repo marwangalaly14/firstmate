@@ -214,6 +214,27 @@ test_steer_refuses_outside_the_chain_and_the_dead() {
   pass "steer refuses a foreign, unrecorded, dead or gone crewmate and a leaderless call, sending and noting nothing"
 }
 
+# --- 3b. a flag given no value names itself ---------------------------------
+# The refusal is the only place a reader learns which word was wrong, so it has
+# to name the word they typed. The parser's internal token for --resolve-key is
+# "key", and --key is a real flag of bin/fm-send.sh meaning something else
+# entirely, so printing the token sends the reader to the wrong flag in the
+# wrong script; --leader only reads correctly because its token happens to
+# match its name.
+test_a_dangling_flag_names_the_flag_that_was_typed() {
+  local home
+  make_home dangling; home=$HOME_DIR
+  run_lead "$home" -- steer --leader lead-a c1 --resolve-key
+  [ "$RC" -ne 0 ] || fail "--resolve-key without a value must be refused"
+  assert_contains "$ERR" "--resolve-key requires a value" "the refusal names --resolve-key, the flag that was typed"
+  run_lead "$home" -- steer c1 "hello" --leader
+  [ "$RC" -ne 0 ] || fail "--leader without a value must be refused"
+  assert_contains "$ERR" "--leader requires a value" "and names --leader when that is the flag that was typed"
+  [ ! -d "$home/state/c1.inbox" ] || fail "nothing is sent by a refused call"
+  [ ! -e "$home/state/lead-a.status" ] || fail "a refused call leaves no note"
+  pass "a value-taking flag given no value is refused naming that exact flag, never the parser's own word for it"
+}
+
 # --- 4. size is measured and warned, never refused ----------------------------
 test_long_steer_is_warned_never_refused() {
   local home long
@@ -313,6 +334,7 @@ test_a_steer_whose_send_fails_notes_and_measures_nothing() {
 test_steer_records_rings_notes_and_measures
 test_steer_resolve_key_closes_the_door
 test_steer_refuses_outside_the_chain_and_the_dead
+test_a_dangling_flag_names_the_flag_that_was_typed
 test_long_steer_is_warned_never_refused
 test_trim_orders_then_types_compact
 test_trim_returns_without_waiting_and_sends_no_continue

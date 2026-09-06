@@ -113,6 +113,7 @@ CREWMATE=
 RESOLVE_KEYS=()
 WORDS=()
 want_value=
+want_flag=
 for a in "$@"; do
   if [ -n "$want_value" ]; then
     case "$want_value" in
@@ -140,8 +141,9 @@ for a in "$@"; do
         WORDS+=("$a")
       fi ;;
   esac
+  [ -z "$want_value" ] || want_flag=$a
 done
-[ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
+[ -z "$want_value" ] || { echo "error: $want_flag requires a value" >&2; exit 1; }
 [ -n "$LEADER" ] || { echo "error: --leader <task-id> is required; a leader names itself, fm-lead never guesses" >&2; exit 1; }
 case "$LEADER" in
   *[!A-Za-z0-9._-]*|.|..) echo "error: '$LEADER' is not a task id" >&2; exit 1 ;;
