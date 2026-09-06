@@ -1272,9 +1272,11 @@ signal_files_actionable() {  # <status-file> ...
 # stat and started no process. What the guards buy for a crewmate that IS
 # still alive is the fold: its status log, the unbounded input, is folded
 # whole only while its own ledger still shows a door rung, which is the only
-# state either loop acts on. A live led crewmate whose doors are all answered
-# keeps writing status lines for the life of its task, and none of them are
-# read here.
+# state anything here acts on. Both readers of that log obey it - the
+# once-a-poll pass over the ledgers (leader_doors_overdue) and the per-signal
+# hold judgement (task_door_held, which both of leader_holds_signal's branches
+# reach) - so a live led crewmate whose doors are all answered keeps writing
+# status lines for the life of its task, and none of them are read here.
 # The chain's other ring, the transcript signals: once per
 # FM_SIGNAL_CHECK_SECS (300) per led crewmate, the poll runs
 # bin/fm-crew-signals.sh, which reads the crewmate's card (the transcript,
@@ -1400,8 +1402,14 @@ task_leader_alive() {  # <task>
 
 # 0 when <task> has an open door (the classifier's fold) whose ledger state is
 # rung: rung to the leader and not yet escalated or answered.
+# The ledger is read first, and it decides the cost, never the verdict: this
+# says 0 only when some open key's LATEST ledger row is rung, and that set is
+# exactly what door_rung_keys prints, so a crewmate with none of them could
+# never have said 0 and its status log - the unbounded input - is not folded.
 task_door_held() {  # <task>
-  local f="$STATE/$1.status" open key _verb _note
+  local f="$STATE/$1.status" open key _verb _note rung
+  rung=$(door_rung_keys "$1")
+  [ -n "$rung" ] || return 1
   open=$(status_open_decisions "$f") || return 1
   [ -n "$open" ] || return 1
   while IFS=$(printf '\t') read -r key _verb _note; do

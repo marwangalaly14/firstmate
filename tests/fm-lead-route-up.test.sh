@@ -698,6 +698,99 @@ test_watcher_records_an_answered_door() {
   pass "watcher: a door the leader closed is recorded answered once and wakes nobody, bound or no bound"
 }
 
+# --- 9b. the hold judgement reads the ledger, not the log -------------------
+# leader_holds_signal reaches task_door_held on both of its branches - a status
+# span carrying no door line, and a bare turn-end - and that judgement says
+# "held" only when a door's LATEST ledger row is rung. The ledger is a handful
+# of rows; the status log it sits beside is folded whole, one pass per line,
+# and it grows for the life of the task. So the ledger has to decide first.
+# Nothing about the OUTCOME changes either way, so the fold itself is counted:
+# BIN_COUNTED below is a bin/ of symlinks to the real scripts with one file
+# replaced by a shim that sources the real bin/fm-classify-lib.sh and then
+# wraps status_open_decisions to record the log it was handed. The watcher and
+# the fold are the real ones; only the boundary between them is counted.
+counted_bin() {  # <dir>: a bin/ that records every fold into FM_TEST_FOLD_LOG
+  local dir=$1 f
+  mkdir -p "$dir"
+  for f in "$ROOT"/bin/*; do ln -sf "$f" "$dir/"; done
+  rm -f "$dir/fm-classify-lib.sh"
+  # The real library carries no include guard and several libraries source it,
+  # so the wrapper is re-applied whenever a fresh copy of the real function has
+  # replaced it - never on top of itself.
+  cat > "$dir/fm-classify-lib.sh" <<SH
+# shellcheck disable=SC1091
+. "$ROOT/bin/fm-classify-lib.sh"
+case "\$(declare -f status_open_decisions)" in
+  *_fm_counted_fold*) ;;
+  *)
+    eval "_fm_counted_fold() \$(declare -f status_open_decisions | tail -n +2)"
+    status_open_decisions() {
+      printf '%s\n' "\$1" >> "\${FM_TEST_FOLD_LOG:-/dev/null}"
+      _fm_counted_fold "\$@"
+    }
+    ;;
+esac
+SH
+  printf '%s\n' "$dir"
+}
+
+# 0 when <file> was folded at least once since the log was truncated.
+was_folded() {  # <status-file>
+  grep -Fqx "$1" "$FOLD_LOG" 2>/dev/null
+}
+
+test_the_hold_judgement_does_not_fold_a_log_without_a_rung_door() {
+  local bin saved
+  if [ "$(id -u)" -eq 0 ]; then
+    pass "skipped as root: a ring cannot be made to fail, so the second shape cannot be built"
+    return 0
+  fi
+  make_home held-cost
+  bin=$(counted_bin "$TMP_ROOT/held-cost/bin")
+  FOLD_LOG="$HOME_DIR/folds"
+  # c1: led by a live leader, no door ever opened, so no ledger exists at all.
+  printf 'working: still reading the report\n' > "$STATE/c1.status"
+  : > "$STATE/c1.turn-ended"
+  [ ! -e "$DATA/c1/doors/index" ] || fail "fixture: c1 has no doors ledger"
+  # c3: led by the same live leader, and its ring did not land - a real ledger
+  # whose latest row is not rung. Its door line is already reported, so the
+  # span the watcher judges is the working line under it.
+  printf '%s\n' "$DOOR" > "$STATE/c3.status"
+  mkdir -p "$STATE/lead-a.inbox"
+  chmod 500 "$STATE/lead-a.inbox"
+  run_relay -- c3
+  chmod 700 "$STATE/lead-a.inbox"
+  [ "$(door_rows c3)" = 'failed:send story-size' ] || fail "fixture: c3's ledger holds no rung row, got:"$'\n'"$(door_rows c3)"
+  prime_status_seen "$STATE" "$STATE/c3.status"
+  printf 'working: picking the work back up\n' >> "$STATE/c3.status"
+  : > "$STATE/c3.turn-ended"
+  # c2: led by a live leader, and its door IS rung - the judgement that must
+  # still say held, and the fold that must still happen.
+  printf '%s\nworking: waiting at the door\n' "$DOOR" > "$STATE/c2.status"
+  run_relay -- c2
+  [ "$(door_rows c2)" = 'rung story-size' ] || fail "fixture: c2's door is rung, got:"$'\n'"$(door_rows c2)"
+  : > "$STATE/c2.turn-ended"
+  : > "$FOLD_LOG"
+  saved=$WATCH
+  WATCH="$bin/fm-watch.sh"
+  watch_bg FM_TEST_FOLD_LOG="$FOLD_LOG" \
+    FM_FAKE_CREW_STATE_c1="$IDLE_STATE" FM_FAKE_CREW_STATE_c2="$IDLE_STATE" FM_FAKE_CREW_STATE_c3="$IDLE_STATE"
+  WATCH=$saved
+  wait_absorbed "absorbed door signal held by leader lead-b: $STATE/c2.turn-ended" \
+    || { reap; fail "the crewmate whose door is rung is still held; out:"$'\n'"$(watch_report)"; }
+  reap
+  # The verdict, both ways: only the rung door was held.
+  grep -Fq "absorbed door signal held by leader lead-a: $STATE/c1" "$STATE/.watch-triage.log" \
+    && fail "a crewmate with no ledger holds nothing"
+  grep -Fq "absorbed door signal held by leader lead-a: $STATE/c3" "$STATE/.watch-triage.log" \
+    && fail "a crewmate whose ring did not land holds nothing"
+  # The cost: the counter works, and the two logs it must not touch are untouched.
+  was_folded "$STATE/c2.status" || fail "the counter must see the fold of the held crewmate's log; folds:"$'\n'"$(cat "$FOLD_LOG")"
+  ! was_folded "$STATE/c1.status" || fail "a crewmate with no doors ledger must not have its status log folded; folds:"$'\n'"$(cat "$FOLD_LOG")"
+  ! was_folded "$STATE/c3.status" || fail "a crewmate whose ledger holds no rung row must not have its status log folded; folds:"$'\n'"$(cat "$FOLD_LOG")"
+  pass "watcher: the hold judgement asks the doors ledger first, so a led crewmate with no ledger, or with a ledger holding no rung row, has its status log left unfolded on both branches - while the crewmate whose door is rung is folded and still held"
+}
+
 # --- 10. what cleanup leaves behind costs the door pass no process ----------
 # A finished crewmate leaves its doors ledger behind: bin/fm-teardown.sh
 # removes the meta record and, through status_retire_presentation_task, the
@@ -807,5 +900,6 @@ test_watcher_surfaces_when_no_leader_holds_the_door
 test_watcher_escalates_a_held_door_once_past_the_bound
 test_watcher_wakes_at_once_when_a_holding_leader_dies
 test_watcher_records_an_answered_door
+test_the_hold_judgement_does_not_fold_a_log_without_a_rung_door
 test_a_finished_crewmates_leftover_ledger_costs_no_process
 test_a_live_crewmate_without_a_rung_door_keeps_its_log_unread
