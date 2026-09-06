@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Steer a task by durable record: write the message into the task's steering
 # inbox and ring a constant doorbell line into its terminal, best-effort.
-# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--from-leader <id>|--captain|--lifecycle <action> [--note <text>]] <text...>
+# Usage: fm-send.sh <target> [--resolve-key <key>]... [--fire-and-forget <delivery-id>] [--from-leader <id>|--captain <n|line>|--lifecycle <action>] [--note <text>] <text...>
 #   <target> may be an exact task id, a legacy fm-<id> task label resolved
 #   through this home's state/<id>.meta, or an explicit well-formed backend
 #   target. fm-send refuses unresolved guesses rather than falling back to a
@@ -201,21 +201,31 @@
 # three marks, recorded in the inbox record's header as mark=<mark>:
 #   --from-leader <id>    the leader's own steer; <id> must be the recorded
 #                         leader (bin/fm-lead.sh steer and trim pass it)
-#   --captain             the captain's words; the WHOLE message must stand,
-#                         whole and contiguous, inside "## Captain's intent" in
-#                         data/<id>/brief.md (the rule that the captain's words
-#                         are appended there first) and be at least
-#                         FM_SEND_CAPTAIN_MIN_LINE (24) characters long, else
-#                         refused. The containment runs this way round because
-#                         the captain's words are the whole message or they are
-#                         not the captain speaking: nothing may ride along with
-#                         a quoted captain line, since anything added puts the
-#                         message outside the section. The minimum keeps a
-#                         short degenerate line standing in that section
-#                         ("None.", "The") from opening the channel by itself;
-#                         a longer fragment of an intent line does clear it,
-#                         and that is no hole, because the containment is the
-#                         mechanism and a fragment can carry no work.
+#   --captain <n|line>    the captain's own words, SELECTED from "## Captain's
+#                         intent" in data/<id>/brief.md (the rule that the
+#                         captain's words are appended there first) and NEVER
+#                         TYPED: the selector is either the number of a line
+#                         in that section, counting its non-blank lines from
+#                         1, or one of those lines exactly.
+#                         THE BODY IS COMPOSED FROM THE FILE
+#                         (fm_send_captain_intent): the selector only points,
+#                         the delivered words are read from the brief, and
+#                         typed text alongside the mark is refused. A line
+#                         with anything appended to it, or any frame around
+#                         it, therefore selects nothing and is refused, and no
+#                         fragment of a line can be chosen at all.
+#                         This replaces a containment test the mark used to
+#                         run over a typed message, for the reason lifecycle
+#                         stopped measuring prose: a string test over free
+#                         text a sender types leaves a differently shaped gap
+#                         every time it is tightened, so the free text is
+#                         removed from the part that carries authority. There
+#                         is no length rule left to state, because there is no
+#                         typed message to measure.
+#                         A sender's note may ride beside the selected line
+#                         with --note, on lifecycle's terms: bounded, one
+#                         line, delivered after the captain's words behind a
+#                         label naming them the sender's own, never merged in.
 #   --lifecycle <action>  relaunch, teardown, handover or escalation; the
 #                         action rides in the mark, so an escalated door (the
 #                         watcher's 30-minute wake, or the leader dead) is
@@ -224,7 +234,7 @@
 #                         (fm_send_lifecycle_body): the caller supplies no
 #                         text and typed text alongside the mark is refused.
 #                         A sender's note may ride beside it with --note: at
-#                         most FM_SEND_LIFECYCLE_NOTE_MAX characters, one
+#                         most FM_SEND_NOTE_MAX characters, one
 #                         line, delivered after the generated line behind a
 #                         label naming it the sender's own words, never
 #                         merged into it. Generated-plus-labelled rather than
@@ -498,6 +508,7 @@ fi
 RESOLVE_KEYS=
 FIRE_AND_FORGET_ID=
 LED_MARK=
+LED_CAPTAIN_SEL=
 LED_NOTE=
 LED_NOTE_GIVEN=0
 fm_send_set_mark() {  # <mark>: at most one of the led channel's marks per send
@@ -517,8 +528,34 @@ fm_send_lifecycle_body() {  # <action> -> the single line delivered for it
 # The note's bound keeps a note a note: it carries context beside the action,
 # never the work, and it always stands AFTER the label, so nothing a sender
 # types can appear as though the lifecycle mechanism said it.
-FM_SEND_LIFECYCLE_NOTE_MAX=200
+FM_SEND_NOTE_MAX=200
 FM_SEND_LIFECYCLE_NOTE_LABEL="-- [sender's note, the sender's own words, not part of this lifecycle action]"
+FM_SEND_CAPTAIN_NOTE_LABEL="-- [sender's note, the sender's own words, not the captain's]"
+FM_SEND_CAPTAIN_LINE_LABEL="The captain's words, verbatim from \"## Captain's intent\" in your brief:"
+# The captain's words are read from the brief, never from the command line, so
+# the sender chooses WHICH line and never WHAT it says.
+fm_send_captain_intent() {  # <brief> -> the non-blank lines of that section, in order
+  awk '
+    /^## Captain'"'"'s intent$/ { f = 1; next }
+    f && /^#/ { exit }
+    f { sub(/[ \t\r]+$/, ""); if ($0 != "") print }
+  ' "$1" 2>/dev/null || true
+}
+# Both marks bound the note the same way: it carries context beside composed
+# words, never the work, and it always stands AFTER its label, so nothing a
+# sender types can appear as though the mechanism or the captain said it.
+fm_send_note_check() {  # <note> <what the note rides beside>
+  case "$1" in
+    *"$FM_NEWLINE"*)
+      echo "error: --note is one line riding beside $2; nothing was sent" >&2
+      return 1
+      ;;
+  esac
+  if [ "${#1}" -gt "$FM_SEND_NOTE_MAX" ]; then
+    echo "error: --note is ${#1} characters and the bound is $FM_SEND_NOTE_MAX: a note carries context beside $2, never the work, which is the leader's to steer. Nothing was sent." >&2
+    return 1
+  fi
+}
 fm_send_add_resolve_key() {  # <key>
   local k=$1
   case "$k" in
@@ -563,9 +600,12 @@ while :; do
       fm_send_set_mark "from-leader:$v" || exit 1
       shift "$n"
       ;;
-    --captain)
+    --captain|--captain=*)
+      if [ "$1" = --captain ]; then v=${2:-}; n=2; else v=${1#--captain=}; n=1; fi
+      case "$v" in ''|--*) echo "error: --captain requires a selector: the number of a line under \"## Captain's intent\" in the brief, or one of its lines exactly" >&2; exit 1 ;; esac
       fm_send_set_mark captain || exit 1
-      shift
+      LED_CAPTAIN_SEL=$v
+      shift "$n"
       ;;
     --lifecycle|--lifecycle=*)
       if [ "$1" = --lifecycle ]; then v=${2:-}; n=2; else v=${1#--lifecycle=}; n=1; fi
@@ -681,9 +721,9 @@ FM_NEWLINE='
 '
 if [ "$LED_NOTE_GIVEN" = 1 ]; then
   case "$LED_MARK" in
-    lifecycle:*) ;;
+    lifecycle:*|captain) ;;
     *)
-      echo "error: --note is the sender's own words riding beside a generated lifecycle line; it needs --lifecycle <relaunch|teardown|handover|escalation>" >&2
+      echo "error: --note is the sender's own words riding beside a composed line; it needs --lifecycle <relaunch|teardown|handover|escalation> or --captain <n|line>" >&2
       exit 1
       ;;
   esac
@@ -708,30 +748,49 @@ case "$LED_MARK" in
       echo "error: --captain applies to a task recorded in this home, not an explicit endpoint" >&2
       exit 1
     fi
-    LED_BRIEF="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md"
-    # The minimum's only job is to refuse a short degenerate line, never to
-    # measure the message: a line like "None." or "The" standing in an intent
-    # section must not be able to open the channel by itself. A longer
-    # fragment of an intent line clears it and lands - the containment above,
-    # not this length, is the mechanism the captain required, and a fragment
-    # carries no work, because anything appended to it puts the message
-    # outside the section.
-    FM_SEND_CAPTAIN_MIN_LINE=24
-    LED_INTENT=$(awk '/^## Captain'"'"'s intent$/{f=1; next} f && /^#/{exit} f' "$LED_BRIEF" 2>/dev/null || true)
-    LED_CAPTAIN_MSG="$*"
-    case "$LED_INTENT" in
-      *"$LED_CAPTAIN_MSG"*) [ "${#LED_CAPTAIN_MSG}" -ge "$FM_SEND_CAPTAIN_MIN_LINE" ] || LED_INTENT= ;;
-      *) LED_INTENT= ;;
-    esac
-    if [ -z "$LED_INTENT" ]; then
-      echo "error: --captain carries the captain's words, and these words do not stand whole and contiguous under \"## Captain's intent\" in $LED_BRIEF, at least $FM_SEND_CAPTAIN_MIN_LINE characters of them; append the captain's words there verbatim first, then send exactly those words and nothing else - the captain's words are the whole message or they are not the captain speaking, so nothing may be added to them on the way. Nothing was sent." >&2
+    if [ -n "$*" ]; then
+      echo "error: --captain composes its line from the brief, so it carries no typed text; select the captain's words with --captain <n|line> instead of retyping them, and pass your own words as --note \"<text>\" to ride beside them, labelled as yours. Nothing was sent." >&2
       exit 1
     fi
+    LED_BRIEF="${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md"
+    LED_INTENT=$(fm_send_captain_intent "$LED_BRIEF")
+    if [ -z "$LED_INTENT" ]; then
+      echo "error: --captain reads the captain's words from \"## Captain's intent\" in $LED_BRIEF, and that section is missing or carries no line; append the captain's words there verbatim first, then select one. Nothing was sent." >&2
+      exit 1
+    fi
+    LED_INTENT_COUNT=$(printf '%s\n' "$LED_INTENT" | wc -l | tr -d ' ')
+    case "$LED_CAPTAIN_SEL" in
+      ''|*[!0-9]*)
+        # An exact line, not a fragment and not a frame: equality against a
+        # whole line of the section, with the delivered words still taken
+        # from the file. Anything appended to a line matches no line at all.
+        LED_CAPTAIN_WANT=$(printf '%s' "$LED_CAPTAIN_SEL" | sed 's/[[:space:]]*$//')
+        LED_LINE=$(printf '%s\n' "$LED_INTENT" | FM_SEND_CAPTAIN_WANT="$LED_CAPTAIN_WANT" \
+          awk '$0 == ENVIRON["FM_SEND_CAPTAIN_WANT"] { print; exit }')
+        if [ -z "$LED_LINE" ]; then
+          echo "error: --captain selects one line of \"## Captain's intent\" in $LED_BRIEF and that section has no such line; it holds $LED_INTENT_COUNT. A line with anything appended to it, a frame around it, or a fragment of one is not that line and selects nothing. Select by number (--captain <1-$LED_INTENT_COUNT>) or pass one line exactly; nothing was sent." >&2
+          exit 1
+        fi
+        ;;
+      *)
+        if [ "$LED_CAPTAIN_SEL" -lt 1 ] || [ "$LED_CAPTAIN_SEL" -gt "$LED_INTENT_COUNT" ]; then
+          echo "error: --captain $LED_CAPTAIN_SEL names no line: \"## Captain's intent\" in $LED_BRIEF holds $LED_INTENT_COUNT. Nothing was sent." >&2
+          exit 1
+        fi
+        LED_LINE=$(printf '%s\n' "$LED_INTENT" | sed -n "${LED_CAPTAIN_SEL}p")
+        ;;
+    esac
+    LED_BODY="$FM_SEND_CAPTAIN_LINE_LABEL $LED_LINE"
+    if [ "$LED_NOTE_GIVEN" = 1 ]; then
+      fm_send_note_check "$LED_NOTE" "the captain's own words" || exit 1
+      LED_BODY="$LED_BODY $FM_SEND_CAPTAIN_NOTE_LABEL $LED_NOTE"
+    fi
+    set -- "$LED_BODY"
     ;;
   lifecycle:*)
     LED_ACTION=${LED_MARK#lifecycle:}
     if [ -n "$*" ]; then
-      echo "error: --lifecycle $LED_ACTION composes its own line from the action; it carries no typed text, so a work instruction can never wear a lifecycle mark. Pass your own words as --note \"<text>\" (at most $FM_SEND_LIFECYCLE_NOTE_MAX characters, one line) and they ride beside the generated line, labelled as yours; the work itself is the leader's to steer. Nothing was sent." >&2
+      echo "error: --lifecycle $LED_ACTION composes its own line from the action; it carries no typed text, so a work instruction can never wear a lifecycle mark. Pass your own words as --note \"<text>\" (at most $FM_SEND_NOTE_MAX characters, one line) and they ride beside the generated line, labelled as yours; the work itself is the leader's to steer. Nothing was sent." >&2
       exit 1
     fi
     LED_BODY=$(fm_send_lifecycle_body "$LED_ACTION") || {
@@ -739,16 +798,7 @@ case "$LED_MARK" in
       exit 1
     }
     if [ "$LED_NOTE_GIVEN" = 1 ]; then
-      case "$LED_NOTE" in
-        *"$FM_NEWLINE"*)
-          echo "error: --note is one line riding beside the generated lifecycle line; nothing was sent" >&2
-          exit 1
-          ;;
-      esac
-      if [ "${#LED_NOTE}" -gt "$FM_SEND_LIFECYCLE_NOTE_MAX" ]; then
-        echo "error: --note is ${#LED_NOTE} characters and the bound is $FM_SEND_LIFECYCLE_NOTE_MAX: a note carries context beside a lifecycle action, never the work, which is the leader's to steer. Nothing was sent." >&2
-        exit 1
-      fi
+      fm_send_note_check "$LED_NOTE" "a lifecycle action" || exit 1
       LED_BODY="$LED_BODY $FM_SEND_LIFECYCLE_NOTE_LABEL $LED_NOTE"
     fi
     set -- "$LED_BODY"
@@ -758,7 +808,7 @@ if [ -z "$LED_MARK" ] && [ "${1:-}" != "--key" ] && [ -n "$LED_LEADER" ] && [ -f
   && [ "$(fm_lead_endpoint_state "$STATE/$LED_LEADER.meta" "$LED_LEADER" 2>/dev/null)" = alive ]; then
   echo "error: $LED_TASK_ID is led by $LED_LEADER (alive): while a leader exists, First Mate reaches a working crewmate with lifecycle and the captain's words only; the work is the leader's to steer:
   FM_HOME=$FM_HOME bin/fm-lead.sh steer --leader $LED_LEADER $LED_TASK_ID \"<one line>\"
-First Mate's own sends carry a mark: --lifecycle <relaunch|teardown|handover|escalation> for a lifecycle action (its line is composed from the action; your own words ride beside it, labelled, with --note \"<text>\"), --captain for the captain's words (appended verbatim to ${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md under \"## Captain's intent\" first), or --key for a keystroke; nothing was sent." >&2
+First Mate's own sends carry a mark: --lifecycle <relaunch|teardown|handover|escalation> for a lifecycle action (its line is composed from the action; your own words ride beside it, labelled, with --note \"<text>\"), --captain <n|line> for the captain's own words (appended verbatim to ${FM_DATA_OVERRIDE:-$FM_HOME/data}/$LED_TASK_ID/brief.md under \"## Captain's intent\" first, then selected from there by number or exact line, never retyped), or --key for a keystroke; nothing was sent." >&2
   exit 1
 fi
 

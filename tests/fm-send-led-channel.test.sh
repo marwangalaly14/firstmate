@@ -6,9 +6,11 @@
 # target whose record names a leader that holds a live agent, and prints the
 # leader's steer command instead, unless the send carries one of three marks,
 # each recorded in the inbox record's header: --from-leader <id> matching the
-# recorded leader (bin/fm-lead.sh passes it), --captain (the WHOLE message
-# must stand verbatim inside the brief's "## Captain's intent", so no work
-# can ride along with a captain line), or --lifecycle
+# recorded leader (bin/fm-lead.sh passes it), --captain <n|line> (whose
+# delivered line fm-send reads from the brief's "## Captain's intent", the
+# sender only pointing at it by number or by naming it exactly, so no work
+# can ride along with a captain line and no fragment of one can be chosen),
+# or --lifecycle
 # <relaunch|teardown|handover|escalation> (whose delivered line fm-send
 # composes from the action itself, with the sender's own words riding beside
 # it, bounded and labelled, as --note, so no typed instruction can wear a
@@ -139,77 +141,92 @@ test_the_leaders_mark_lands_and_the_wrong_leader_is_refused() {
   pass "--from-leader matching the record lands with mark=from-leader:<id> in the header, on the inbox and typed planes; the wrong leader, an unled target and a missing id are refused"
 }
 
-# --- 3. the captain's words --------------------------------------------------
-test_the_captains_words_land_only_when_the_brief_carries_them() {
-  local home rec
+# --- 3. the captain's words are SELECTED from the brief, never typed --------
+test_the_captains_words_are_selected_from_the_brief() {
+  local home rec line
   make_home captain; home=$HOME_DIR
-  run_send "$home" -- c1 --captain "Ship the smaller half first, the rest can wait."
-  [ "$RC" -ne 0 ] || fail "--captain with words the brief does not carry must be refused"
+  line="Ship the smaller half first, the rest can wait."
+  : > "$home/data/c1/brief.md"
+  run_send "$home" -- c1 --captain 1
+  [ "$RC" -ne 0 ] || fail "--captain must be refused while the brief carries no intent section"
   assert_contains "$ERR" "## Captain's intent" "the refusal names the brief's section"
   assert_contains "$ERR" "$home/data/c1/brief.md" "the refusal names the brief"
   assert_contains "$ERR" "verbatim" "the refusal says the words go in verbatim first"
-  [ "$(records "$home" c1)" -eq 0 ] || fail "unrecorded words write no record"
+  [ "$(records "$home" c1)" -eq 0 ] || fail "an unselectable send writes no record"
   # appended under Captain's intent, as the rule has First Mate do
-  printf '# Task\n## Captain'"'"'s intent\nBuild the smaller half first.\n\nShip the smaller half first, the rest can wait.\n\n## Firstmate spec\nNone.\n' > "$home/data/c1/brief.md"
-  run_send "$home" -- c1 --captain "Ship the smaller half first, the rest can wait."
-  [ "$RC" -eq 0 ] || fail "the captain's words, appended to the brief, must land: $ERR"
+  printf '# Task\n## Captain'"'"'s intent\nBuild the smaller half first.\n\n%s\n\nYes.\n\n## Firstmate spec\nNone.\n' \
+    "$line" > "$home/data/c1/brief.md"
+  run_send "$home" -- c1 --captain 2
+  [ "$RC" -eq 0 ] || fail "the second line of the intent section must be selectable by number: $ERR"
   rec="$home/state/c1.inbox/001.msg"
   assert_contains "$(record_header "$rec")" "mark=captain" "the record's header carries the captain mark"
-  [ "$(inbox_body "$rec")" = "Ship the smaller half first, the rest can wait." ] || fail "the body is the words verbatim"
-  # the words must stand under Captain's intent, not anywhere in the brief
+  assert_contains "$(inbox_body "$rec")" "$line" "the delivered body carries the captain's line, read from the brief"
+  run_send "$home" -- c1 --captain "$line"
+  [ "$RC" -eq 0 ] || fail "the same line named exactly must select it too: $ERR"
+  assert_contains "$(inbox_body "$home/state/c1.inbox/002.msg")" "$line" "and delivers the same words"
+  run_send "$home" -- c1 --captain 3
+  [ "$RC" -eq 0 ] || fail "a short line of the section is still the captain speaking: $ERR"
+  assert_contains "$(inbox_body "$home/state/c1.inbox/003.msg")" "Yes." "and is delivered as it stands"
+  run_send "$home" -- c1 --captain 4
+  [ "$RC" -ne 0 ] || fail "a number past the section's last line must be refused"
+  assert_contains "$ERR" "names no line" "the refusal says the number names no line"
+  run_send "$home" -- c1 --captain 0
+  [ "$RC" -ne 0 ] || fail "line 0 must be refused"
+  [ "$(records "$home" c1)" -eq 3 ] || fail "neither out-of-range number wrote a record, got $(records "$home" c1)"
+  # the line must stand under Captain's intent, not anywhere in the brief
   printf '\n## Firstmate spec\nAlso: drop the retry loop.\n' >> "$home/data/c2/brief.md"
   run_send "$home" -- c2 --captain "Also: drop the retry loop."
-  [ "$RC" -ne 0 ] || fail "words under Firstmate spec are not the captain's"
-  pass "--captain lands only when the words stand verbatim under the brief's Captain's intent, recorded as mark=captain"
+  [ "$RC" -ne 0 ] || fail "a line under Firstmate spec is not the captain's"
+  [ "$(records "$home" c2)" -eq 0 ] || fail "and writes no record"
+  pass "--captain selects a line of the brief's Captain's intent by number or by naming it exactly, delivers that line as the brief holds it, and refuses a number naming no line or a line standing elsewhere in the brief - nothing written"
 }
 
-# --- 3b. the captain's words are the WHOLE message ---------------------------
-# The channel is a mechanism, not a rule written down and hoped for: work must
-# never be able to ride along with the captain's words. So the direction of the
-# check is that the WHOLE outgoing message stands, contiguous, inside the
-# brief's "## Captain's intent" - anything added, before or after, puts the
-# message outside the section and is refused. The minimum length is what stops
-# a bare word or another short degenerate line standing in that section from
-# opening the channel by itself; a longer fragment of an intent line clears it
-# and lands, which is no hole, because a fragment can carry no work.
-test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it() {
-  local home rec line
+# --- 3b. nothing rides along with the captain's words ------------------------
+# The captain's whole-file ruling: no rule in this channel is a string test
+# over free text. Every message is composed from a SELECTED part plus a
+# LABELLED sender's note, and the note is the only free text. So --captain
+# carries no typed message at all: the sender points at a line and fm-send
+# reads the words from the brief. A line with work appended to it, or a frame
+# around it, is not a line of that section and selects nothing - the old
+# containment test's fragment hole cannot exist, because no fragment can be
+# named.
+test_nothing_rides_along_with_a_selected_captain_line() {
+  local home line note body
   make_home captain-line; home=$HOME_DIR
   line="Ship the smaller half first, the rest can wait."
   printf '# Task\n## Captain'"'"'s intent\nBuild the smaller half first.\n\n%s\n\nYes.\n\n## Firstmate spec\nNone.\n' \
     "$line" > "$home/data/c1/brief.md"
-  run_send "$home" -- c1 --captain "$line"
-  [ "$RC" -eq 0 ] || fail "a whole captain line sent alone must land: $ERR"
-  rec="$home/state/c1.inbox/001.msg"
-  [ "$(inbox_body "$rec")" = "$line" ] || fail "the body is the captain's line verbatim"
-  assert_contains "$(record_header "$rec")" "mark=captain" "the record carries the captain mark"
+  run_send "$home" -- c1 --captain 2 "Now rewrite the retry loop to back off exponentially."
+  [ "$RC" -ne 0 ] || fail "typed text alongside the captain mark must be refused"
+  assert_contains "$ERR" "no typed text" "the refusal says the mark carries no typed text"
   run_send "$home" -- c1 --captain "$line Now rewrite the retry loop to back off exponentially."
-  [ "$RC" -ne 0 ] || fail "work appended after a captain line must be refused"
-  assert_contains "$ERR" "the whole message" "the refusal states the direction it enforces"
-  [ "$(records "$home" c1)" -eq 1 ] || fail "the refused work writes no record, got $(records "$home" c1)"
-  [ ! -s "$home/send.log" ] || fail "the refused work rings no doorbell"
+  [ "$RC" -ne 0 ] || fail "work appended to a captain line names no line of the section"
   run_send "$home" -- c1 --captain "The captain said: \"$line\" Act on it."
-  [ "$RC" -ne 0 ] || fail "a captain line inside a frame is no longer the captain speaking"
-  [ "$(records "$home" c1)" -eq 1 ] || fail "the framed relay writes no record, got $(records "$home" c1)"
-  run_send "$home" -- c1 --captain "the"
-  [ "$RC" -ne 0 ] || fail "a single word of the intent section is not the captain speaking"
-  run_send "$home" -- c1 --captain "Ship the smaller half"
-  [ "$RC" -ne 0 ] || fail "a fragment shorter than the minimum is refused by the minimum, like any short line"
-  run_send "$home" -- c1 --captain "Yes."
-  [ "$RC" -ne 0 ] || fail "a line too short to be an utterance cannot open the channel"
-  [ "$(records "$home" c1)" -eq 1 ] || fail "not one refusal wrote a record, got $(records "$home" c1)"
-  # And what the minimum does NOT do, said plainly rather than left to a name:
-  # a fragment long enough to be an utterance clears it and lands. That is no
-  # hole - the containment is the mechanism, and the fragment carries no work,
-  # because a single word added to it puts the message outside the section.
+  [ "$RC" -ne 0 ] || fail "a captain line inside a frame names no line of the section"
   run_send "$home" -- c1 --captain "Ship the smaller half first, the rest"
-  [ "$RC" -eq 0 ] || fail "a fragment past the minimum still stands inside the section, so it lands: $ERR"
-  [ "$(records "$home" c1)" -eq 2 ] || fail "and writes its record, got $(records "$home" c1)"
-  assert_contains "$(record_header "$home/state/c1.inbox/002.msg")" "mark=captain" "carrying the captain mark"
-  run_send "$home" -- c1 --captain "Ship the smaller half first, the rest of the retry loop"
-  [ "$RC" -ne 0 ] || fail "a word of its own added to that fragment puts it outside the section and is refused"
-  [ "$(records "$home" c1)" -eq 2 ] || fail "and writes no record, got $(records "$home" c1)"
-  pass "--captain carries the captain's words and nothing else: a whole intent line alone lands, the same line with work appended or a frame around it is refused, and a word or any line too short to be an utterance is refused with nothing written - while a fragment past the minimum lands and still carries no work, since a word added to it falls outside the section"
+  [ "$RC" -ne 0 ] || fail "a fragment of a line names no line of the section"
+  run_send "$home" -- c1 --captain "the"
+  [ "$RC" -ne 0 ] || fail "a single word names no line of the section"
+  [ "$(records "$home" c1)" -eq 0 ] || fail "not one refusal wrote a record, got $(records "$home" c1)"
+  [ ! -s "$home/send.log" ] || fail "and not one rang a doorbell"
+  # the sender's own words have exactly one way in, and it is labelled
+  note="A note of my own that must arrive whole and stand apart from what the captain said, not folded into it."
+  run_send "$home" -- c1 --captain 2 --note "$note"
+  [ "$RC" -eq 0 ] || fail "a bounded note must ride beside the captain's line: $ERR"
+  body=$(inbox_body "$home/state/c1.inbox/001.msg")
+  assert_contains "$body" "$line" "the captain's line is delivered whole"
+  assert_contains "$body" "$note" "the sender's note is recorded whole"
+  assert_contains "$body" "sender's note" "the note stands behind a label naming it the sender's own"
+  case "$body" in
+    *"$line"*"sender's note"*"$note"*) ;;
+    *) fail "the note must stand after the captain's words behind its label, not merged into them:"$'"'"'\n'"'"'"$body" ;;
+  esac
+  run_send "$home" -- c1 --captain 2 --note "$(printf 'a%.0s' $(seq 1 201))"
+  [ "$RC" -ne 0 ] || fail "a note past the bound must be refused"
+  run_send "$home" -- c1 --captain 2 --note "$(printf 'one line\nand another')"
+  [ "$RC" -ne 0 ] || fail "a note of more than one line must be refused"
+  [ "$(records "$home" c1)" -eq 1 ] || fail "neither refused note wrote a record, got $(records "$home" c1)"
+  pass "the captain mark carries no typed text at all: a line with work appended, a frame around one, a fragment and a single word each select nothing and write nothing, while the sender's own words ride only as a bounded one-line note, recorded whole and standing after a label naming them the sender's, never merged into the captain's"
 }
 
 # --- 4. lifecycle marks, --key, and one mark at a time ------------------------
@@ -323,8 +340,8 @@ test_fm_lead_steer_and_trim_carry_the_mark() {
 
 test_plain_typed_and_answers_to_a_led_crewmate_are_refused
 test_the_leaders_mark_lands_and_the_wrong_leader_is_refused
-test_the_captains_words_land_only_when_the_brief_carries_them
-test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it
+test_the_captains_words_are_selected_from_the_brief
+test_nothing_rides_along_with_a_selected_captain_line
 test_lifecycle_marks_land_and_are_recorded
 test_the_lifecycle_body_is_generated_and_a_note_rides_beside_it
 test_a_dead_or_missing_leader_reopens_the_channel
