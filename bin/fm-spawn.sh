@@ -257,10 +257,10 @@
 # instructions before every trim: the keep-set bin/fm-compact-lib.sh owns.
 # A claude ship or scout crewmate that is not a leader is a story crewmate: its
 # worktree .claude/settings.local.json also carries the one settings key that
-# moves the harness's automatic trim to the captain's 140K line, derived in
-# bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; this
+# moves the harness's automatic trim to the captain's 250K line, derived in
+# bin/fm-compact-lib.sh (250000 + 20000 reserved output + 13000 margin; this
 # script reads fm_compact_window rather than restating the sum), and its
-# record says so with trim_mark=140000 and trim_window=<that sum>. Both are
+# record says so with trim_mark=250000 and trim_window=<that sum>. Both are
 # owned keys rewritten by every launch, so a relaunch onto a harness without
 # the key drops the claim; a harness without the key, a leader, and a
 # secondmate get neither line nor claim. Nothing stops, warns, or throttles
@@ -2941,7 +2941,7 @@ if [ "$KIND" != secondmate ]; then
       # is deliberately not matched. The command prints nothing, because a
       # SessionStart hook's stdout enters the crewmate's context.
       j_sessionstart=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-session-event.sh") $(shell_quote "$DATA_REAL") $(shell_quote "$ID") 2>/dev/null || true")
-      # The 140K line (bin/fm-compact-lib.sh owns the number and the key): a
+      # The 250K line (bin/fm-compact-lib.sh owns the number and the key): a
       # story crewmate's harness trims its own head at the captain's line
       # instead of the model default; a leader (leads=1) keeps the harness's
       # own window. The line is written here and recorded below as
