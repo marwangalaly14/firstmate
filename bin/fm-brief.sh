@@ -543,9 +543,9 @@ The report is the only thing that survives, so anything worth keeping must be in
    treating it as a possible wedge. Use \`blocked: [key=stuck] {why}\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: [key=stuck] {why}\` and stop; $HELPER.
 6. If a decision belongs to a human (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. $REPLIER.
+   append \`needs-decision: [key=<short-slug-you-choose>] {summary of options}\` and stop. $REPLIER.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: [key=<the same slug>] {how it cleared}\` yourself as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: [key=stuck] {the daemon error}\` and stop; only firstmate manages the daemon.
@@ -630,10 +630,10 @@ $RULE1
    cadence instead of treating it as a possible wedge. Use \`blocked: [key=stuck] {why}\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: [key=stuck] {why}\` and stop; $HELPER.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. $REPLIER.
+   append \`needs-decision: [key=<short-slug-you-choose>] {summary of options}\` and stop. $REPLIER.
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: [key=<the same slug>] {how it cleared}\` yourself as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: [key=stuck] {the daemon error}\` and stop; only firstmate manages the daemon.

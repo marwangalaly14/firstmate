@@ -9,8 +9,10 @@
 # pushback before beginning (needs-decision [key=story-size]) and the stuck
 # door (blocked [key=stuck]), answered in the inbox by the leader that
 # --leader names, or by First Mate when there is none. --leader accepts only
-# a task recorded with leads=1 in this home's state. The crewmate contract
-# paragraph says who the crewmate reports to, the landing order on a project
+# a task recorded with leads=1 in this home's state. Rule 6 asks for that same
+# keyed shape, the only one bin/fm-lead-relay.sh and bin/fm-watch.sh can route
+# to a leader. The crewmate contract paragraph says who the crewmate reports
+# to, the landing order on a project
 # that runs the loop, and the three commands never run on a session's own
 # judgement. A secondmate charter carries none of it. --leads appends "# You
 # lead crewmates" to a ship or scout brief, opening with "Read
@@ -231,11 +233,46 @@ test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
   pass "--leads appends the leader section after the doors, opening with 'Read docs/branch-leader.md before your first steer' and the playbook's absolute path, on every ship mode and the scout; no brief without --leads, led or not, nor the charter, names the playbook; --leads with --leader and on a charter are refused"
 }
 
+# --- 7. one shape for a decision: rule 6 teaches the keyed line ---------------
+# A crewmate's decision reaches its leader only through the [key=<slug>] token:
+# bin/fm-lead-relay.sh and bin/fm-watch.sh both gate on
+# status_line_decision_key, which refuses an unkeyed line, so a crewmate that
+# followed an unkeyed rule 6 would stop with nobody told. The proof runs on the
+# GENERATED brief - the thing that actually reaches a worker - and then feeds
+# the line that brief teaches to the reader that routes it.
+test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
+  local home id brief taught line key
+  make_home decision; home=$HOME_DIR
+  fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
+  for id_args in "q1:--mode no-mistakes" "q2:--scout" "q3:--mode no-mistakes --leader lead-a" "q4:--scout --leader lead-a"; do
+    id=${id_args%%:*}
+    # shellcheck disable=SC2086  # the args are a fixed word list
+    scaffold "$home" "$id" proj ${id_args#*:}
+    [ "$RC" -eq 0 ] || fail "$id: scaffold must exit 0:"$'\n'"$OUT"
+    brief="$home/data/$id/brief.md"
+    # One shape for a decision in the whole brief, as for blocked: every
+    # instruction to write one carries a key.
+    [ "$(grep -c 'needs-decision: ' "$brief")" -ge 2 ] || fail "$id: the brief's needs-decision instructions, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief")"
+    [ "$(grep -c 'needs-decision: ' "$brief")" -eq "$(grep -c 'needs-decision: \[key=' "$brief")" ] \
+      || fail "$id: needs-decision is spelled one way, the keyed one, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief" | grep -v 'key=')"
+    # And the line rule 6 teaches must actually route: fill its placeholders in
+    # and hand it to the reader the relay and the watcher key on.
+    taught=$(grep -o 'needs-decision: \[key=[^]]*\] {summary of options}' "$brief" | head -1)
+    [ -n "$taught" ] || fail "$id: rule 6 must teach a keyed decision line, got:"$'\n'"$(grep -n 'needs-decision' "$brief")"
+    line=$(printf '%s' "$taught" | sed 's/<short-slug-you-choose>/story-shape/; s/{summary of options}/two ways to shape the split, A or B/')
+    key=$(bash -c '. "$1"; status_line_decision_key "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$line") \
+      || fail "$id: the line rule 6 teaches carries no key its leader's reader accepts: '$line'"
+    [ "$key" = story-shape ] || fail "$id: the reader must read the crewmate's own key, got '$key'"
+  done
+  pass "rule 6 of every generated ship, scout and led brief asks for a keyed needs-decision line, the only shape the leader's relay and the watcher can route, and needs-decision is spelled that one way throughout the brief"
+}
+
 test_ship_and_scout_briefs_carry_the_two_doors
 test_leader_is_named_and_must_be_a_recorded_leader
 test_crewmate_contract_paragraph
 test_identity_line_and_reading_habit
 test_no_machinery_words_and_the_charter_is_untouched
 test_leads_brief_points_at_the_playbook_and_nothing_else_does
+test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about
 
 echo "# all fm-brief-doors tests passed"

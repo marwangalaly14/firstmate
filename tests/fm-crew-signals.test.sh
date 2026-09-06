@@ -12,7 +12,9 @@
 # FM_LEAD_ORDER_STALE_SECS. The ledger data/<id>/signals/index keeps one row per signal and
 # signature, so the same episode is silent and a new signature rings again; an
 # unled crewmate never rings; a logbook that claims progress does not quiet a
-# loop the transcript shows; a dead leader gets one failed row and no send.
+# loop the transcript shows. Only a DELIVERED ring closes an episode: a dead
+# leader gets one failed row and no send, the episode stays open and is retried
+# at every later check, and the ring lands once the leader is relaunched.
 # bin/fm-watch.sh runs the check once per FM_SIGNAL_CHECK_SECS per led crewmate
 # from its poll and never wakes First Mate for it. The detector is driven
 # directly; the watcher runs as a real subprocess over the chain's fake tmux.
@@ -97,6 +99,13 @@ inbox_count() {  # <id>
   local n=0 f
   for f in "$STATE/$1.inbox"/*.msg; do [ -f "$f" ] && n=$((n + 1)); done
   printf '%s' "$n"
+}
+
+# The oldest unhandled record's body, read through the inbox library's own
+# reader rather than by opening a path this test picked.
+oldest_inbox_body() {  # <id>
+  bash -c '. "$1"; rec=$(fm_task_inbox_oldest_unhandled "$2" "$3") || exit 1; fm_task_inbox_body "$rec"' \
+    _ "$ROOT/bin/fm-task-inbox-lib.sh" "$STATE" "$1"
 }
 
 newest_inbox_body() {  # <id>
@@ -519,25 +528,57 @@ test_an_order_lands_where_the_check_reads_it() {
   pass "with data/ pointed away from FM_HOME, the order bin/fm-lead.sh writes is the order the signals check reads: writer and reader resolve the directory the same way"
 }
 
-test_dead_leader_is_recorded_once() {
+# --- only a delivered ring closes an episode ---------------------------------
+# The whole path in one case. The leader is gone when the signal fires, so the
+# ring FAILS: the failure is recorded once as evidence and the episode stays
+# OPEN. Every later check with the leader still gone tries the ring again, says
+# so on stdout and writes no second row. First Mate relaunches the leader and
+# the very next check DELIVERS the ring to it; only then is the episode closed
+# and silent. The first failure and the eventual success both stand in the
+# ledger, and nothing in between does.
+test_a_failed_ring_is_retried_until_one_is_delivered() {
+  local summary
   make_home dead
   plant_loop c1
+  summary='loop 3x Bash bash tests/x.test.sh in the last 30 calls'
+
   run_signals FM_FAKE_GONE_WINDOWS=fm-lead-a -- c1
-  [ "$OUT" = "loop	failed:leader-dead	loop 3x Bash bash tests/x.test.sh in the last 30 calls" ] \
-    || fail "a dead leader is a failed ring, got: '$OUT' ($ERR)"
+  [ "$OUT" = "loop	failed:leader-dead	$summary" ] || fail "a dead leader is a failed ring, got: '$OUT' ($ERR)"
   [ "$(inbox_count lead-a)" -eq 0 ] || fail "nothing is sent to a dead leader"
   [ ! -s "$HOME_DIR/send.log" ] || fail "no doorbell rang"
-  [ "$(ledger_rows c1)" = "loop failed:leader-dead" ] || fail "the ledger records the failure, got: $(ledger_rows c1)"
+  [ "$(ledger_rows c1)" = "loop failed:leader-dead" ] || fail "the failure is recorded once, got: $(ledger_rows c1)"
+
+  # Still gone: the episode is open, so the check retries and adds no row.
   run_signals FM_FAKE_GONE_WINDOWS=fm-lead-a -- c1
-  assert_contains "$OUT" "loop	silent" "the failed episode is not retried every check"
-  [ "$(ledger_count c1)" -eq 1 ] || fail "one row for the failed episode, got $(ledger_count c1)"
-  # A leader whose record is gone: no-record, once.
+  [ "$OUT" = "loop	failed:leader-dead	$summary" ] || fail "an open episode is retried, never silenced, got: '$OUT'"
+  [ "$(ledger_count c1)" -eq 1 ] || fail "a repeated failure writes no second row, ledger has $(ledger_count c1)"
+  [ "$(inbox_count lead-a)" -eq 0 ] || fail "a leader that is still gone is still not sent to"
+
+  # Relaunched: the next check delivers the ring to the leader itself.
+  run_signals -- c1
+  [ "$OUT" = "loop	rung	$summary" ] || fail "the relaunched leader must be rung, got: '$OUT' ($ERR)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "the ring lands in the leader's steering inbox, inbox has $(inbox_count lead-a)"
+  assert_contains "$(oldest_inbox_body lead-a)" "signal: c1 loop: $summary" "the delivered record carries the signal line"
+  [ "$(ledger_rows c1)" = "loop failed:leader-dead
+loop rung" ] || fail "the first failure and the delivery both stand, and nothing in between, got: $(ledger_rows c1)"
+
+  # Delivered, so closed: silent from here, no row, no second ring.
+  run_signals -- c1
+  [ "$OUT" = "loop	silent	$summary" ] || fail "a delivered ring closes the episode, got: '$OUT'"
+  [ "$(ledger_count c1)" -eq 2 ] || fail "a closed episode writes no row, ledger has $(ledger_count c1)"
+  [ "$(inbox_count lead-a)" -eq 1 ] || fail "a closed episode rings nobody again"
+  [ "$(queue_records)" -eq 0 ] || fail "First Mate is not woken for any of it"
+
+  # A leader with no record at all fails the same way, recorded once.
   rm -f "$STATE/lead-a.meta"
   rm -rf "$DATA/c1/signals"
   run_signals -- c1
   assert_contains "$OUT" "loop	failed:leader-no-record" "a leader with no record is a failed ring"
+  [ "$(ledger_rows c1)" = "loop failed:leader-no-record" ] || fail "recorded once, got: $(ledger_rows c1)"
+  run_signals -- c1
+  [ "$(ledger_count c1)" -eq 1 ] || fail "and not again while it keeps failing, ledger has $(ledger_count c1)"
   [ "$(queue_records)" -eq 0 ] || fail "no wake record either way"
-  pass "a dead or unrecorded leader gets one failed row and no send; the episode is not retried on every check; First Mate is not woken"
+  pass "only a delivered ring closes an episode: a dead leader's failed ring is recorded once as evidence, retried at every later check while it keeps failing, delivered to the leader once First Mate relaunches it, and silent from then on; First Mate is never woken"
 }
 
 test_loop_rings_once_per_episode
@@ -552,4 +593,4 @@ test_watcher_rings_from_its_poll_and_stays_quiet
 test_a_trim_order_that_was_never_answered_rings_the_leader
 test_an_automatic_trim_does_not_answer_the_order
 test_an_order_lands_where_the_check_reads_it
-test_dead_leader_is_recorded_once
+test_a_failed_ring_is_retried_until_one_is_delivered

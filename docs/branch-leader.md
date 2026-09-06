@@ -85,7 +85,8 @@ It is mechanical, from the transcript and nowhere else: nothing the crewmate wri
 The card in the ring is the `--outside` one, without the logbook's next line - the card's one field in the crewmate's own words; run `bin/fm-crew-vitals.sh <id>` yourself when you want to read that line.
 Read the pane and the logbook against the story's acceptance criteria, then steer once if the work is off, or do nothing if it is sound; a foreground test run that legitimately takes twenty minutes rings a stall once and needs no answer.
 Each episode rings once (the ledger is `data/<id>/signals/index`); the same loop growing, or the same stall lengthening, stays silent, and a new shape rings again.
-First Mate is not told about signals; a dead leader's crewmate signals go nowhere (one failed row), and First Mate learns of the dead leader through its own liveness reads.
+Only a DELIVERED ring closes an episode: while you were dead the ring failed, that failure is recorded once as evidence, and the episode stays open, so the check tries again every five minutes - relaunch and you are told what your crewmate is doing, however long you were gone.
+First Mate is not told about signals; it learns of a dead leader through its own liveness reads.
 The crewmate's own `stuck` door is a separate, human-shaped knock; the signals work whether or not it ever knocks.
 
 ## Steers

@@ -47,15 +47,21 @@
 #           trim line or an order-failed line ends the episode by clearing the
 #           order.
 # Each signal rings the leader named by state/<task-id>.meta's leader= line
-# once per episode: the ledger data/<task-id>/signals/index takes one row per
-# signal and signature -
+# once per episode, and ONLY A DELIVERED RING CLOSES AN EPISODE. The ledger
+# data/<task-id>/signals/index is
 #   <epoch>\t<signal>\t<signature>\t<rung|failed:<why>>\t<leader>\t<summary>
-# - and a signal whose row exists is silent (why: leader-dead, leader-unknown,
-# leader-no-record, send; a failed ring is recorded once too, so a dead leader
-# is never hammered and First Mate is not woken for it: it learns of a dead
-# leader through its own liveness paths, the leader being a task). The ring is
-# one bin/fm-send.sh record on the leader's steering inbox: the signal line,
-# the crewmate's card, and how to steer. The leader's endpoint is read with
+# and a signal whose (signal, signature) already carries a `rung` row is silent
+# and skips. A failed ring (why: leader-dead, leader-unknown, leader-no-record,
+# send) leaves the episode OPEN: it is recorded once as evidence and never
+# again, and every later check re-reads the leader's endpoint and tries the
+# ring again, so a leader relaunched after a failure is still told what its
+# crewmate is doing. The first failure and the eventual success are both in the
+# ledger, and nothing in between is. The retry hammers nobody: with the
+# leader's endpoint not alive there is no send at all, only the endpoint read
+# the check already does. First Mate is not woken for any of it; it learns of a
+# dead leader through its own liveness paths, the leader being a task.
+# The ring is one bin/fm-send.sh record on the leader's steering inbox: the
+# signal line, the crewmate's card, and how to steer. The leader's endpoint is read with
 # bin/fm-lead-lib.sh (fm_lead_endpoint_state) before any send. A crewmate
 # with no leader= line never rings and gets no ledger.
 # Who runs it: bin/fm-watch.sh, for every led crewmate once per
@@ -192,9 +198,16 @@ until mkdir "$LOCK" 2>/dev/null; do
 done
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
-episode_recorded() {  # <signal> <signature> -> 0 when the ledger has its row
+# The two readings of the ledger, both under the lock above. Only a delivered
+# ring closes an episode; a failure is evidence, kept once, that leaves it open.
+episode_closed() {  # <signal> <signature> -> 0 when a `rung` row stands
   [ -f "$LEDGER" ] || return 1
-  awk -F '\t' -v s="$1" -v g="$2" '$2 == s && $3 == g { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
+  awk -F '\t' -v s="$1" -v g="$2" '$2 == s && $3 == g && $4 == "rung" { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
+}
+
+failure_recorded() {  # <signal> <signature> -> 0 when a `failed:` row stands
+  [ -f "$LEDGER" ] || return 1
+  awk -F '\t' -v s="$1" -v g="$2" '$2 == s && $3 == g && $4 ~ /^failed:/ { found = 1 } END { exit !found }' "$LEDGER" 2>/dev/null
 }
 
 leader_state=none
@@ -220,7 +233,7 @@ read_card_text() {
 how=
 while IFS=$'\t' read -r signal signature summary; do
   [ -n "$signal" ] || continue
-  if episode_recorded "$signal" "$signature"; then
+  if episode_closed "$signal" "$signature"; then
     printf '%s\tsilent\t%s\n' "$signal" "$summary"
     continue
   fi
@@ -241,8 +254,10 @@ $how"
       result=failed:send
     fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$signal" "$signature" "$result" "$LEADER" "$summary" >> "$LEDGER" 2>/dev/null \
-    || echo "fm-crew-signals: could not write $LEDGER" >&2
+  if [ "$result" = rung ] || ! failure_recorded "$signal" "$signature"; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$signal" "$signature" "$result" "$LEADER" "$summary" >> "$LEDGER" 2>/dev/null \
+      || echo "fm-crew-signals: could not write $LEDGER" >&2
+  fi
   printf '%s\t%s\t%s\n' "$signal" "$result" "$summary"
 done <<EOF
 $signals

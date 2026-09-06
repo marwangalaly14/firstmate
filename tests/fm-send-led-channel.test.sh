@@ -6,8 +6,9 @@
 # target whose record names a leader that holds a live agent, and prints the
 # leader's steer command instead, unless the send carries one of three marks,
 # each recorded in the inbox record's header: --from-leader <id> matching the
-# recorded leader (bin/fm-lead.sh passes it), --captain (the words must already
-# stand verbatim in the brief's "## Captain's intent"), or --lifecycle
+# recorded leader (bin/fm-lead.sh passes it), --captain (the WHOLE message must
+# stand verbatim inside the brief's "## Captain's intent", so no work can ride
+# along with a captain line), or --lifecycle
 # <relaunch|teardown|handover|escalation>. --key stays open (Enter, Escape and
 # C-c are lifecycle). A dead or missing leader reopens the channel; an unled
 # crewmate is untouched. The contract lives in fm-send's header ("The led
@@ -159,35 +160,40 @@ test_the_captains_words_land_only_when_the_brief_carries_them() {
   pass "--captain lands only when the words stand verbatim under the brief's Captain's intent, recorded as mark=captain"
 }
 
-# --- 3b. a word is not a captain utterance -----------------------------------
-# The channel is a mechanism, not a rule written down and hoped for: --captain
-# must carry a WHOLE line the captain actually said, long enough that a word or
-# a fragment of one can never open it. Containment is deliberate, so a line may
-# be relayed inside quotation marks or a short frame.
-test_the_captain_mark_takes_a_whole_line_not_a_fragment() {
+# --- 3b. the captain's words are the WHOLE message ---------------------------
+# The channel is a mechanism, not a rule written down and hoped for: work must
+# never be able to ride along with the captain's words. So the direction of the
+# check is that the WHOLE outgoing message stands, contiguous, inside the
+# brief's "## Captain's intent" - anything added, before or after, puts the
+# message outside the section and is refused. The minimum length is what stops
+# a bare word standing in that section from opening the channel by itself.
+test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it() {
   local home rec line
   make_home captain-line; home=$HOME_DIR
   line="Ship the smaller half first, the rest can wait."
   printf '# Task\n## Captain'"'"'s intent\nBuild the smaller half first.\n\n%s\n\nYes.\n\n## Firstmate spec\nNone.\n' \
     "$line" > "$home/data/c1/brief.md"
-  run_send "$home" -- c1 --captain "the"
-  [ "$RC" -ne 0 ] || fail "a single word of the intent section is not the captain speaking"
-  [ "$(records "$home" c1)" -eq 0 ] || fail "a refused word writes no record"
-  run_send "$home" -- c1 --captain "Ship the smaller half"
-  [ "$RC" -ne 0 ] || fail "a fragment of a captain line must be refused"
-  [ "$(records "$home" c1)" -eq 0 ] || fail "a refused fragment writes no record"
-  run_send "$home" -- c1 --captain "Yes."
-  [ "$RC" -ne 0 ] || fail "a line too short to be an utterance cannot open the channel"
-  [ "$(records "$home" c1)" -eq 0 ] || fail "the short line writes no record"
   run_send "$home" -- c1 --captain "$line"
-  [ "$RC" -eq 0 ] || fail "a whole captain line must land: $ERR"
+  [ "$RC" -eq 0 ] || fail "a whole captain line sent alone must land: $ERR"
   rec="$home/state/c1.inbox/001.msg"
   [ "$(inbox_body "$rec")" = "$line" ] || fail "the body is the captain's line verbatim"
   assert_contains "$(record_header "$rec")" "mark=captain" "the record carries the captain mark"
+  run_send "$home" -- c1 --captain "$line Now rewrite the retry loop to back off exponentially."
+  [ "$RC" -ne 0 ] || fail "work appended after a captain line must be refused"
+  assert_contains "$ERR" "the whole message" "the refusal states the direction it enforces"
+  [ "$(records "$home" c1)" -eq 1 ] || fail "the refused work writes no record, got $(records "$home" c1)"
+  [ ! -s "$home/send.log" ] || fail "the refused work rings no doorbell"
   run_send "$home" -- c1 --captain "The captain said: \"$line\" Act on it."
-  [ "$RC" -eq 0 ] || fail "a captain line quoted inside a frame must land: $ERR"
-  [ "$(records "$home" c1)" -eq 2 ] || fail "the quoted relay is recorded, got $(records "$home" c1)"
-  pass "--captain takes a whole line of the brief's Captain's intent, quoted or framed; a word, a fragment of a line and a line too short to be an utterance are all refused with nothing written"
+  [ "$RC" -ne 0 ] || fail "a captain line inside a frame is no longer the captain speaking"
+  [ "$(records "$home" c1)" -eq 1 ] || fail "the framed relay writes no record, got $(records "$home" c1)"
+  run_send "$home" -- c1 --captain "the"
+  [ "$RC" -ne 0 ] || fail "a single word of the intent section is not the captain speaking"
+  run_send "$home" -- c1 --captain "Ship the smaller half"
+  [ "$RC" -ne 0 ] || fail "a fragment of a captain line must be refused"
+  run_send "$home" -- c1 --captain "Yes."
+  [ "$RC" -ne 0 ] || fail "a line too short to be an utterance cannot open the channel"
+  [ "$(records "$home" c1)" -eq 1 ] || fail "not one refusal wrote a record, got $(records "$home" c1)"
+  pass "--captain carries the captain's words and nothing else: a whole intent line alone lands, the same line with work appended or a frame around it is refused, and a word, a fragment and a line too short to be an utterance are refused with nothing written"
 }
 
 # --- 4. lifecycle marks, --key, and one mark at a time ------------------------
@@ -252,7 +258,7 @@ test_fm_lead_steer_and_trim_carry_the_mark() {
 test_plain_typed_and_answers_to_a_led_crewmate_are_refused
 test_the_leaders_mark_lands_and_the_wrong_leader_is_refused
 test_the_captains_words_land_only_when_the_brief_carries_them
-test_the_captain_mark_takes_a_whole_line_not_a_fragment
+test_the_captain_mark_takes_the_whole_message_not_a_frame_around_it
 test_lifecycle_marks_land_and_are_recorded
 test_a_dead_or_missing_leader_reopens_the_channel
 test_fm_lead_steer_and_trim_carry_the_mark

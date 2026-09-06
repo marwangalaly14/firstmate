@@ -217,8 +217,8 @@ EOF
     fi
     send_args=()
     for k in ${RESOLVE_KEYS[@]+"${RESOLVE_KEYS[@]}"}; do send_args+=(--resolve-key "$k"); done
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" --from-leader "$LEADER" ${send_args[@]+"${send_args[@]}"} "$TEXT"
-    send_rc=$?
+    send_rc=0
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$CREWMATE" --from-leader "$LEADER" ${send_args[@]+"${send_args[@]}"} "$TEXT" || send_rc=$?
     [ "$send_rc" -eq 0 ] || exit "$send_rc"
     first=$(printf '%s\n' "$TEXT" | head -n 1)
     leader_note "note: steered $CREWMATE ($chars chars, $lines lines): $first"

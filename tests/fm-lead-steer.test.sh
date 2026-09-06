@@ -293,6 +293,23 @@ test_trim_failed_send_is_recorded() {
   pass "trim: a /compact that did not reach is recorded as order-failed and fails; foreign and dead crewmates are refused before any record"
 }
 
+# --- 8. a steer whose send fails writes nothing and returns fm-send's status --
+# The guard below the send is the thing that exits, so a refusal from fm-send
+# stops fm-lead before the note line and the measured row: a leader must never
+# read a note claiming it steered a crewmate that was never reached.
+test_a_steer_whose_send_fails_notes_and_measures_nothing() {
+  local home
+  make_home steerfail; home=$HOME_DIR
+  # A key no open door carries: fm-send refuses before any durable mutation.
+  run_lead "$home" -- steer --leader lead-a c1 --resolve-key nosuch "drop the retry loop"
+  expect_code 1 "$RC" "fm-lead steer exits with fm-send's own status: $ERR"
+  assert_contains "$ERR" "no open decision or blocker with that key" "the failure is fm-send's own refusal"
+  [ ! -e "$home/state/c1.inbox" ] || fail "a failed steer leaves the crewmate no record"
+  [ ! -e "$home/state/lead-a.status" ] || fail "a failed steer writes no note: line:"$'\n'"$(cat "$home/state/lead-a.status" 2>/dev/null)"
+  [ ! -e "$home/data/lead-a/steers/index" ] || fail "a failed steer appends no steers row:"$'\n'"$(cat "$home/data/lead-a/steers/index" 2>/dev/null)"
+  pass "a steer whose send fails exits with fm-send's exact status and writes neither the leader's note line nor a steers row"
+}
+
 test_steer_records_rings_notes_and_measures
 test_steer_resolve_key_closes_the_door
 test_steer_refuses_outside_the_chain_and_the_dead
@@ -300,3 +317,4 @@ test_long_steer_is_warned_never_refused
 test_trim_orders_then_types_compact
 test_trim_returns_without_waiting_and_sends_no_continue
 test_trim_failed_send_is_recorded
+test_a_steer_whose_send_fails_notes_and_measures_nothing

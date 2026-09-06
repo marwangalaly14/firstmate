@@ -201,15 +201,17 @@
 # three marks, recorded in the inbox record's header as mark=<mark>:
 #   --from-leader <id>    the leader's own steer; <id> must be the recorded
 #                         leader (bin/fm-lead.sh steer and trim pass it)
-#   --captain             the captain's words; the message must contain, whole
-#                         and contiguous, a line of at least
-#                         FM_SEND_CAPTAIN_MIN_LINE (24) characters standing
-#                         under "## Captain's intent" in data/<id>/brief.md
-#                         (the rule that the captain's words are appended there
-#                         first), else refused. Containment, not equality, so a
-#                         captain line may be relayed inside quotation marks or
-#                         with a short frame around it; a word or a fragment of
-#                         a line is not the captain speaking and never passes.
+#   --captain             the captain's words; the WHOLE message must stand,
+#                         whole and contiguous, inside "## Captain's intent" in
+#                         data/<id>/brief.md (the rule that the captain's words
+#                         are appended there first) and be at least
+#                         FM_SEND_CAPTAIN_MIN_LINE (24) characters long, else
+#                         refused. The containment runs this way round because
+#                         the captain's words are the whole message or they are
+#                         not the captain speaking: nothing may ride along with
+#                         a quoted captain line, since anything added puts the
+#                         message outside the section. The minimum keeps a word
+#                         or a fragment from opening the channel by itself.
 #   --lifecycle <action>  relaunch, teardown, handover or escalation; the
 #                         action rides in the mark, so an escalated door (the
 #                         watcher's 30-minute wake, or the leader dead) is
@@ -659,21 +661,14 @@ case "$LED_MARK" in
     # measure the message: a short degenerate line in an intent section
     # ("None.", "The") must not be able to open the channel by itself.
     FM_SEND_CAPTAIN_MIN_LINE=24
-    LED_INTENT=matched
-    FM_SEND_CAPTAIN_MSG="$*" awk -v min="$FM_SEND_CAPTAIN_MIN_LINE" '
-      BEGIN { msg = ENVIRON["FM_SEND_CAPTAIN_MSG"]; found = 0 }
-      /^## Captain'"'"'s intent$/ { f = 1; next }
-      f && /^##? / { exit }
-      f {
-        line = $0
-        sub(/^[ \t]+/, "", line)
-        sub(/[ \t]+$/, "", line)
-        if (length(line) >= min && index(msg, line) > 0) { found = 1; exit }
-      }
-      END { exit(found ? 0 : 1) }
-    ' "$LED_BRIEF" 2>/dev/null || LED_INTENT=
+    LED_INTENT=$(awk '/^## Captain'"'"'s intent$/{f=1; next} f && /^#/{exit} f' "$LED_BRIEF" 2>/dev/null || true)
+    LED_CAPTAIN_MSG="$*"
+    case "$LED_INTENT" in
+      *"$LED_CAPTAIN_MSG"*) [ "${#LED_CAPTAIN_MSG}" -ge "$FM_SEND_CAPTAIN_MIN_LINE" ] || LED_INTENT= ;;
+      *) LED_INTENT= ;;
+    esac
     if [ -z "$LED_INTENT" ]; then
-      echo "error: --captain carries the captain's words, and no whole line of \"## Captain's intent\" in $LED_BRIEF (at least $FM_SEND_CAPTAIN_MIN_LINE characters) stands inside these words; append the captain's words there verbatim first, then send a whole line of them - a word or a fragment of one is not the captain speaking. Nothing was sent." >&2
+      echo "error: --captain carries the captain's words, and these words do not stand whole and contiguous under \"## Captain's intent\" in $LED_BRIEF, at least $FM_SEND_CAPTAIN_MIN_LINE characters of them; append the captain's words there verbatim first, then send exactly those words and nothing else - the captain's words are the whole message or they are not the captain speaking, so nothing may be added to them on the way. Nothing was sent." >&2
       exit 1
     fi
     ;;
