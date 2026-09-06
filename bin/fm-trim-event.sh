@@ -36,12 +36,12 @@
 #   `order-failed <epoch>` when the /compact provably did not reach the pane.
 #   A manual trim whose nearest earlier ledger line is a pending `ordered`
 #   line - pending as bin/fm-lead-lib.sh's fm_lead_pending_order reads it,
-#   the one reading this fleet has - is the leader's: its record says `- ordered by: leader <id> ...` and
-#   its index line ends in ordered:<leader>; any other manual trim says
-#   `- ordered by: nobody in the ledger`. Only a manual trim answers an order:
-#   an automatic trim is not the thing the leader ordered, so it leaves the
-#   order standing for the queued /compact to spend. Order lines are never
-#   counted as trims.
+#   the one reading this fleet has - is the leader's: its record says
+#   `- ordered by: leader <id> ...` and its index line ends in
+#   ordered:<leader>; any other manual trim says `- ordered by: nobody in
+#   the ledger`. Only a manual trim answers an order: an automatic trim is
+#   not the thing the leader ordered, so it leaves the order standing for
+#   the queued /compact to spend. Order lines are never counted as trims.
 #
 #   The carry-on nudge, on a manual trim the leader ordered and on no other
 #   trim: this hook fires only once the compaction has finished, and the

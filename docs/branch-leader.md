@@ -63,8 +63,12 @@ Read that record against the story's acceptance criteria.
 - If the crewmate's head is heavy with what it no longer needs, order a trim with a focus: `FM_HOME=<home> bin/fm-lead.sh trim --leader <leader-id> <crewmate-id> <what to keep>`.
   The order is written into the crewmate's trim ledger first, then `/compact <focus>` is typed into its pane; a crewmate that is mid-turn queues the typed order and trims at its next turn boundary (measured live on 2.1.259: typed 8 s into a 49 s turn, queued on screen, run 10 ms after the turn ended), so an order is never an interrupt.
   The trim that follows is recorded as the leader's (`- ordered by: leader <id>`) and rings nobody, but the crewmate itself is nudged: its own trim hook sends `trim done - continue: <focus>` into its inbox when the compaction ends.
-  The command does not wait for any of that: it marks the order, types `/compact`, and returns, so nothing you run has to outlive a compaction for the crewmate to be told to carry on. The nudge is an append, so [the law of the head](#the-law-of-the-head) holds.
-  If the trim could have happened and did not - the crewmate has come back to its prompt, is not mid-turn, and `FM_LEAD_ORDER_STALE_SECS` (430 s: twice the longest compaction measured on this fleet, where they take 100-215 s) has passed with no trim of its own - the order stands unanswered in the ledger and the watcher's signals check rings you once, naming the crewmate, how long ago you ordered it and that no trim event ever arrived. Only a manual trim answers your order: an automatic trim that lands first is not the thing you ordered, so it leaves the order standing for your queued `/compact` to spend when it runs. A crewmate still mid-turn is never reported here - its order is queued behind the turn, not lost - and neither is one wedged in a call that never ends, including a session that died mid-call: both are the stall signal's business, not this one's. Each half has an owner: the crewmate's hook carries it on when the trim happens, the signals check tells you when it could have and did not.
+  The command does not wait for any of that: it marks the order, types `/compact`, and returns, so nothing you run has to outlive a compaction for the crewmate to be told to carry on.
+  The nudge is an append, so [the law of the head](#the-law-of-the-head) holds.
+  If the trim could have happened and did not - the crewmate has come back to its prompt, is not mid-turn, and `FM_LEAD_ORDER_STALE_SECS` (430 s: twice the longest compaction measured on this fleet, where they take 100-215 s) has passed with no trim of its own - the order stands unanswered in the ledger and the watcher's signals check rings you once, naming the crewmate, how long ago you ordered it and that no trim event ever arrived.
+  Only a manual trim answers your order: an automatic trim that lands first is not the thing you ordered, so it leaves the order standing for your queued `/compact` to spend when it runs.
+  A crewmate still mid-turn is never reported here - its order is queued behind the turn, not lost - and neither is one wedged in a call that never ends, including a session that died mid-call: both are the stall signal's business, not this one's.
+  Each half has an owner: the crewmate's hook carries it on when the trim happens, the signals check tells you when it could have and did not.
 - If the story is two stories, write the split note for First Mate in your logbook and status.
 - If the crewmate cannot be steered back, write the handover note from its logbook; First Mate relaunches, because a relaunch is irreversible and the leader never performs one.
 
@@ -77,8 +81,10 @@ Every five minutes the watcher reads each of your crewmates' cards and rings you
 
 - `signal: <id> stall: busy with nothing new for 17m (bound 15m); last call Bash \`...\`` - a tool call in flight, or a prompt the model has not answered, with nothing written for `FM_STUCK_CALL_SECS` (900): stuck in one call or wedged.
 - `signal: <id> loop: loop 3x Bash \`bash tests/x.test.sh\` in the last 30 calls` - the same command three or more times in the last 30 calls, the same file read five or more times, or an A-B-A-B bounce.
-- `signal: <id> drift?: 46K tokens since the last commit (82m) with no logbook change over that spend (bound 40K; logbook untouched)` - `FM_DRIFT_TOKENS` (40,000) spent since the last commit while the logbook did not change. A candidate, never a verdict: the question mark is deliberate.
-- `signal: <id> trim-order: an ordered trim never happened: leader <you> ordered it 8m ago and no trim event has arrived since (bound 7m)` - a trim you ordered that nothing answered for `FM_LEAD_ORDER_STALE_SECS` (430 s) while the crewmate sat idle. A busy crewmate never rings this: a typed `/compact` waits for its turn to end, so an order under a working crewmate is queued, not lost, and a crewmate that never ends its turn is the stall signal's business instead.
+- `signal: <id> drift?: 46K tokens since the last commit (82m) with no logbook change over that spend (bound 40K; logbook untouched)` - `FM_DRIFT_TOKENS` (40,000) spent since the last commit while the logbook did not change.
+  A candidate, never a verdict: the question mark is deliberate.
+- `signal: <id> trim-order: an ordered trim never happened: leader <you> ordered it 8m ago and no trim event has arrived since (bound 7m)` - a trim you ordered that nothing answered for `FM_LEAD_ORDER_STALE_SECS` (430 s) while the crewmate sat idle.
+  A busy crewmate never rings this: a typed `/compact` waits for its turn to end, so an order under a working crewmate is queued, not lost, and a crewmate that never ends its turn is the stall signal's business instead.
 
 The ring carries the crewmate's card and the steer command.
 It is mechanical, from the transcript and nowhere else: nothing the crewmate writes, says or reports enters it, so a logbook that claims progress does not quiet a loop the transcript shows.
@@ -115,7 +121,8 @@ Every epic branch leader reports progress in one shape, stewarded on its branch 
 - one closing paragraph, "What the bar means": what the epic can do today and what the missing part buys.
 
 Write it from your own logbook and the vitals, never from the crewmates' words.
-Write the DONE lines without commit ids in the first place: name what changed for a person, not the commit that carried it. The scaffold's stripper deletes any id that slips through, and only that - it never removes a word, so a citation's leftover wording stays as you wrote it.
+Write the DONE lines without commit ids in the first place: name what changed for a person, not the commit that carried it.
+The scaffold's stripper deletes any id that slips through, and only that - it never removes a word, so a citation's leftover wording stays as you wrote it.
 The scaffold fills what it can read and leaves the rest to you:
 
 ```sh

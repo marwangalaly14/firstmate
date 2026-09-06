@@ -260,11 +260,12 @@
 # moves the harness's automatic trim to the captain's 140K line, derived in
 # bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; this
 # script reads fm_compact_window rather than restating the sum), and its
-# record says so with trim_mark=140000 and trim_window=<that sum>. Both are owned keys rewritten by every launch, so a
-# relaunch onto a harness without the key drops the claim; a harness without the
-# key, a leader, and a secondmate get neither line nor claim. Nothing stops,
-# warns, or throttles the crewmate: the harness trims every session somewhere,
-# and this only moves that point.
+# record says so with trim_mark=140000 and trim_window=<that sum>. Both are
+# owned keys rewritten by every launch, so a relaunch onto a harness without
+# the key drops the claim; a harness without the key, a leader, and a
+# secondmate get neither line nor claim. Nothing stops, warns, or throttles
+# the crewmate: the harness trims every session somewhere, and this only
+# moves that point.
 # The fresh head: when the claude crewmate's or leader's checkout is the
 # firstmate repo itself (AGENTS.md opening "# Firstmate", CLAUDE.md its
 # pointer), the same settings file carries claudeMdExcludes for the worktree's
