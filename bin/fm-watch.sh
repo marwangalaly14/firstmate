@@ -1262,13 +1262,19 @@ signal_files_actionable() {  # <status-file> ...
 # ring failed, or when the span carries any other captain-relevant line. An
 # unled crewmate never enters this path, and nothing here reaches the
 # crewmate.
-# What the per-poll pass over the ledgers may READ is bounded by the ledgers
-# themselves: a crewmate's status log - the unbounded input, folded whole - is
-# read only when that crewmate's own ledger still shows a door rung, which is
-# the only state either loop acts on. It has to be, because bin/fm-teardown.sh
-# leaves both data/<id>/doors/ and state/<id>.status behind while the meta
-# record goes, so the set of crewmates walked here grows for the life of the
-# home and never shrinks.
+# Cleanup shapes what this per-poll pass costs. bin/fm-teardown.sh removes the
+# meta record AND the status log (status_retire_presentation_task, in
+# bin/fm-classify-lib.sh, is what unlinks state/<id>.status), but nothing
+# removes data/<id>/doors/: it lives under data/ with the crewmate's other
+# durable records and outlives the crewmate. So this pass is reached for task
+# ids whose status log is already gone, and that missing file is the ordinary
+# torn-down case, never an error - the loop leaves such an id having spent one
+# stat and started no process. What the guards buy for a crewmate that IS
+# still alive is the fold: its status log, the unbounded input, is folded
+# whole only while its own ledger still shows a door rung, which is the only
+# state either loop acts on. A live led crewmate whose doors are all answered
+# keeps writing status lines for the life of its task, and none of them are
+# read here.
 # The chain's other ring, the transcript signals: once per
 # FM_SIGNAL_CHECK_SECS (300) per led crewmate, the poll runs
 # bin/fm-crew-signals.sh, which reads the crewmate's card (the transcript,
@@ -1529,11 +1535,12 @@ EOF
 # older than the bound or when the leader holding it is no longer alive
 # (nobody holds it then), and a rung door the status log shows closed is
 # recorded as answered so it is not read again. Both of those act only on a
-# door whose LATEST ledger row is rung, so the ledger is read first and the
-# crewmate's status log is folded only when this crewmate still holds one:
-# that fold is the whole cost of the pass, and bin/fm-teardown.sh leaves both
-# the ledger and the status log behind when a crewmate is torn down, so the
-# set walked here only ever grows. Exits the cycle through wake() on the first
+# door whose LATEST ledger row is rung. The three guards below are ordered by
+# what they cost, cheapest first, because a ledger outlives its crewmate (see
+# the block above) and this loop walks every ledger the home ever wrote: a
+# builtin stat for the status log a teardown has already removed, then one
+# awk over the small ledger, and only then the whole-file fold of a live
+# crewmate's unbounded status log. Exits the cycle through wake() on the first
 # escalation, as every actionable wake does.
 leader_doors_overdue() {
   local ledger task f open key _verb _note now age reason leader why rung _leader
@@ -1541,10 +1548,10 @@ leader_doors_overdue() {
   for ledger in "$DATA"/*/doors/index; do
     [ -f "$ledger" ] || continue
     task=${ledger%/doors/index}; task=${task##*/}
-    rung=$(door_rung_keys "$task")
-    [ -n "$rung" ] || continue
     f="$STATE/$task.status"
     [ -f "$f" ] && [ ! -L "$f" ] || continue
+    rung=$(door_rung_keys "$task")
+    [ -n "$rung" ] || continue
     open=$(status_open_decisions "$f") || continue
     # A rung door the fold no longer lists is answered: record it once.
     while IFS=$(printf '\t') read -r key _leader; do

@@ -698,34 +698,87 @@ test_watcher_records_an_answered_door() {
   pass "watcher: a door the leader closed is recorded answered once and wakes nobody, bound or no bound"
 }
 
-# --- 10. the watcher: no rung door, no status log read ----------------------
-# Both loops of the watcher's door pass act only on a door whose LATEST ledger
-# row is rung, and the pass runs on every poll over every ledger that exists.
-# The ledger is a handful of rows; the status log beside it is unbounded, and a
-# teardown leaves BOTH behind (only the meta record goes), so the set of
-# crewmates the pass walks grows for the life of the home. The bound is
-# therefore that a crewmate with no still-rung door costs the pass its ledger
-# and nothing more - and nothing but the cost of reading that log separates
-# reading it from leaving it alone, so the cost is what this asserts: a
-# torn-down crewmate carrying a long log beside a ledger with no rung row must
-# not stop a live crewmate's overdue door being escalated inside the same
-# budget every other case here escalates inside.
-test_watcher_reads_no_status_log_without_a_rung_door() {
-  local gone_rows
-  make_home bounded
-  # c1's door was rung to a leader that was already dead, so the relay - the
-  # real path, no hand-written row - recorded why it could not ring and left
-  # no rung row behind.
+# --- 10. what cleanup leaves behind costs the door pass no process ----------
+# A finished crewmate leaves its doors ledger behind: bin/fm-teardown.sh
+# removes the meta record and, through status_retire_presentation_task, the
+# status log, but nothing under data/ is removed, so data/<id>/doors/index
+# outlives its crewmate and this pass walks every ledger the home ever wrote,
+# on every poll, for ever. What one of those leftovers may cost is therefore
+# the whole question, and it cannot be answered by looking at the pass's
+# OUTPUT - the output is the same whichever order the guards run in. So the
+# processes are counted instead: an awk shim on the watcher's PATH records
+# every awk started against a doors ledger, and a leftover must start none.
+test_a_finished_crewmates_leftover_ledger_costs_no_process() {
+  local id counter real_awk started
+  make_home leftovers
+  real_awk=$(command -v awk)
+  counter="$HOME_DIR/awk-on-ledgers"
+  write_task "$HOME_DIR" c4 "leader=lead-a"
+  write_task "$HOME_DIR" c5 "leader=lead-a"
+  for id in c1 c3 c4 c5; do
+    printf '%s\n' "$DOOR" > "$STATE/$id.status"
+    run_relay -- "$id"
+    [ "$(door_rows "$id")" = 'rung story-size' ] || fail "fixture: $id's door is rung, got:"$'\n'"$(door_rows "$id")"
+    # Cleanup's own code, not an imitation of it: the same call bin/fm-teardown.sh
+    # makes, plus the meta record it removes beside it.
+    bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-classify-lib.sh"; status_retire_presentation_task "$2" "$3"' \
+      _ "$ROOT" "$STATE" "$id" || fail "fixture: retiring $id's status presentation must succeed"
+    rm -f "$STATE/$id.meta"
+    [ ! -e "$STATE/$id.status" ] || fail "fixture: cleanup removes $id's status log"
+    [ -f "$DATA/$id/doors/index" ] || fail "fixture: cleanup leaves $id's doors ledger behind"
+  done
+  # c2 is alive, led by a live leader, and its door is past the bound: the one
+  # crewmate on this home that can still hold a door.
+  printf '%s\n' "$DOOR" > "$STATE/c2.status"
+  run_relay -- c2
+  prime_status_seen "$STATE" "$STATE/c2.status"
+  cat > "$FAKEBIN/awk" <<SH
+#!/usr/bin/env bash
+last=
+for a in "\$@"; do last=\$a; done
+case "\$last" in */doors/index) printf '%s\n' "\$last" >> "$counter" ;; esac
+exec "$real_awk" "\$@"
+SH
+  chmod +x "$FAKEBIN/awk"
+  : > "$counter"
+  sleep 1
+  watch_bg FM_LEADER_ESCALATE_SECS=1
+  wait_exit || { reap; fail "the poll must still escalate c2's overdue door; out:"$'\n'"$(watch_report)"; }
+  assert_contains "$(watch_report)" "signal: $STATE/c2.status (door [key=story-size] of c2 has stayed open" "the live crewmate's overdue door is still found and reported"
+  [ "$(door_rows c2 | tr '\n' ',')" = 'rung story-size,escalated story-size,' ] || fail "c2's ledger records the escalation, got:"$'\n'"$(door_rows c2)"
+  # The shim sees the pass reading the ledger of the crewmate that is still
+  # there - without this the count below would prove nothing.
+  started=$(sort -u "$counter" 2>/dev/null | tr '\n' ' ')
+  case "$started" in *"$DATA/c2/doors/index"*) ;; *) fail "the pass must read the live crewmate's ledger, awk ran on:"$'\n'"$started" ;; esac
+  for id in c1 c3 c4 c5; do
+    case "$started" in
+      *"$DATA/$id/doors/index"*) fail "no process may be started for $id, whose crewmate is finished and whose status log cleanup removed; awk ran on:"$'\n'"$started" ;;
+    esac
+    [ "$(door_rows "$id")" = 'rung story-size' ] || fail "$id's leftover ledger is left as it was, got:"$'\n'"$(door_rows "$id")"
+  done
+  pass "watcher: a finished crewmate's leftover doors ledger costs the door pass one stat and no process at all - the guards run cheapest first, so an id whose status log cleanup removed is skipped before any awk starts, while the one crewmate that can still hold a door is read and its overdue door escalated"
+}
+
+# --- 11. a live crewmate holding no rung door keeps its log unread ----------
+# The fold is the pass's other cost, and the one that grows: status_open_decisions
+# reads a LIVE crewmate's whole status log, and that log grows for the life of
+# the task. It is skipped while that crewmate's ledger shows no door still
+# rung, and nothing but the cost of reading separates reading it from leaving
+# it alone - so the cost is the assertion: a live crewmate with a long log and
+# no rung door must not delay the poll that escalates another crewmate's
+# overdue door.
+test_a_live_crewmate_without_a_rung_door_keeps_its_log_unread() {
+  local quiet_rows
+  make_home unread
+  # c1 is alive and led, but its door was rung while its leader was dead, so
+  # the relay recorded why it could not ring and left no rung row behind.
   printf '%s\n' "$DOOR" > "$STATE/c1.status"
   run_relay FM_FAKE_SHELL_WINDOWS=fm-lead-a -- c1
   [ "$(door_rows c1)" = 'failed:leader-dead story-size' ] \
     || fail "fixture: c1's ledger must hold no rung row, got:"$'\n'"$(door_rows c1)"
-  # c1 is then torn down the way bin/fm-teardown.sh tears one down: the meta
-  # record goes, its status log and its doors ledger stay - and the log is long.
-  rm -f "$STATE/c1.meta"
   awk 'BEGIN{for (i = 0; i < 60000; i++) print "working: still reading the report, pass " i}' >> "$STATE/c1.status"
   prime_status_seen "$STATE" "$STATE/c1.status"
-  gone_rows=$(door_rows c1)
+  quiet_rows=$(door_rows c1)
   # c2 is alive, led by a live leader, and its door is past the bound.
   printf '%s\n' "$DOOR" > "$STATE/c2.status"
   run_relay -- c2
@@ -733,12 +786,12 @@ test_watcher_reads_no_status_log_without_a_rung_door() {
   prime_status_seen "$STATE" "$STATE/c2.status"
   sleep 1
   watch_bg FM_FAKE_SHELL_WINDOWS=fm-lead-a FM_LEADER_ESCALATE_SECS=1
-  wait_exit || { reap; fail "the poll must reach c2's overdue door without reading the log of a crewmate that holds no door; out:"$'\n'"$(watch_report)"; }
+  wait_exit || { reap; fail "the poll must reach c2's overdue door without folding the log of a crewmate that holds no door; out:"$'\n'"$(watch_report)"; }
   assert_contains "$(watch_report)" "signal: $STATE/c2.status (door [key=story-size] of c2 has stayed open" "the still-rung door is still found and reported"
   [ "$(door_rows c2 | tr '\n' ',')" = 'rung story-size,escalated story-size,' ] || fail "c2's ledger records the escalation, got:"$'\n'"$(door_rows c2)"
   queue_is_signal_on c2.status || fail "one signal wake, on c2's status log, got:"$'\n'"$(watch_report)"
-  [ "$(door_rows c1)" = "$gone_rows" ] || fail "the torn-down crewmate's ledger is left as it was, got:"$'\n'"$(door_rows c1)"
-  pass "watcher: a crewmate whose ledger holds no still-rung door costs the door pass its ledger and nothing else - a torn-down crewmate's 60,000-line status log, left behind beside a ledger with no rung row, does not delay the poll that escalates a live crewmate's overdue door"
+  [ "$(door_rows c1)" = "$quiet_rows" ] || fail "the quiet crewmate's ledger is left as it was, got:"$'\n'"$(door_rows c1)"
+  pass "watcher: a live crewmate whose ledger holds no still-rung door keeps its status log unread - a 60,000-line log does not delay the poll that escalates another crewmate's overdue door"
 }
 
 test_relay_rings_each_keyed_door_once
@@ -754,4 +807,5 @@ test_watcher_surfaces_when_no_leader_holds_the_door
 test_watcher_escalates_a_held_door_once_past_the_bound
 test_watcher_wakes_at_once_when_a_holding_leader_dies
 test_watcher_records_an_answered_door
-test_watcher_reads_no_status_log_without_a_rung_door
+test_a_finished_crewmates_leftover_ledger_costs_no_process
+test_a_live_crewmate_without_a_rung_door_keeps_its_log_unread
