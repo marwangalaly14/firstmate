@@ -47,7 +47,7 @@ The controls are scoped to the launched process and never modify the captain's g
 ## Primary integration
 
 Primary behavior was verified 2026-07-04 on 2.1.201, preserved 2026-07-08 on 2.1.204, and Stop auto-arm revalidated 2026-07-24 on 2.1.219.
-This differs from the worker side, where `.claude/settings.local.json` in the task worktree carries only the task-marker busy hooks, the session-record, keep-set, trim-record and task-card hooks, and a story crewmate's trim line; `../../../bin/fm-spawn.sh`'s header owns that set.
+This differs from the worker side, where `.claude/settings.local.json` in the task worktree carries only the task-marker busy hooks (a led crewmate's Stop hook also running the door relay), the session-record, keep-set, trim-record and task-card hooks, a story crewmate's trim line, and, on a checkout of the firstmate repo itself, the `claudeMdExcludes` key that keeps First Mate's own job description out of the crewmate's head; `../../../bin/fm-spawn.sh`'s header owns that set.
 
 Primary `.claude/settings.json` registers `../../../bin/fm-turnend-guard.sh --claude` and `../../../bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 Guard exit 2 plus stderr forces continuation.

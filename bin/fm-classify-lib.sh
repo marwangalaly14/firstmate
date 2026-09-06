@@ -360,6 +360,19 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
   _fm_decision_slug_ok "$k" || return 1
   printf '%s' "$k"
 }
+# The key of a keyed decision line, for readers outside this file: prints the
+# slug of a needs-decision or blocked line carrying a [key=<slug>] token and
+# returns 0; returns 1 and prints nothing for any other line (another verb, no
+# token, a malformed slug). bin/fm-lead-relay.sh and bin/fm-watch.sh read a
+# led crewmate's doors through this, so the token grammar stays owned here.
+status_line_decision_key() {  # <status-line>
+  local verb key
+  verb=$(status_line_verb "$1")
+  case "$verb" in needs-decision|blocked) ;; *) return 1 ;; esac
+  key=$(_fm_decision_key "$1") || return 1
+  [ "$key" != default ] || return 1
+  printf '%s' "$key"
+}
 # Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>
@@ -637,6 +650,13 @@ _fm_open_decisions_cursor_path() {  # <status-file>
 FM_OPEN_DECISIONS_FOLD_VERSION=5
 
 # Portable device:inode identity for the rotation/recreation check below.
+# The identity a presentation marker binds a classified position to, for
+# readers outside this file (bin/fm-watch.sh's chain absorb hands it to
+# mark_surfaced exactly as the surfacing path hands the span record's).
+status_file_identity() {  # <file>
+  _fm_open_decisions_file_ident "$1"
+}
+
 _fm_open_decisions_file_ident() {  # <file> -> strongest available identity
   local f=$1 epoch birth ident
   if [ -n "${FM_STATUS_IDENTITY_READER:-}" ]; then

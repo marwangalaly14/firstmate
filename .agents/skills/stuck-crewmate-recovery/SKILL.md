@@ -41,6 +41,9 @@ If the worktree or ownership cannot be reconciled safely, leave all state intact
 
 ## Live-endpoint escalation
 
+A crewmate whose record names a live branch leader is that leader's to answer, not First Mate's: the answer in step 2 and the redirect in step 3 are refused by `fm-send` for it, which prints the leader's own steer command instead ([`docs/branch-leader.md`](../../../docs/branch-leader.md); `bin/fm-send.sh`'s header owns the led channel).
+Lifecycle - interrupt, relaunch, teardown - stays First Mate's on every crewmate, led or not.
+
 Escalate in order:
 
 1. Peek the pane, and check the task's steering inbox (`state/<id>.inbox/`) for unhandled `*.msg` records - a stale wake naming an unread firstmate instruction means the worker never acknowledged a durable steer, and the record itself shows exactly what was intended.

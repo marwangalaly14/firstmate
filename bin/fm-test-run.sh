@@ -239,7 +239,7 @@ family_for_basename() {
     fm-wake-drain-unread-status.test.sh|\
     fm-tool-update-check.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
-    fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
+    fm-watch-triage.test.sh|fm-task-inbox.test.sh|fm-lead-route-up.test.sh|fm-crew-signals.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
@@ -294,10 +294,10 @@ family_for_basename() {
     fm-tmux-agent-liveness.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
-    fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
+    fm-send-inbox.test.sh|fm-send-led-channel.test.sh|fm-spawn-batch.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
-    fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|\
-    fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|fm-brief-doors.test.sh|\
+    fm-spawn-leader-chain.test.sh|fm-session-event.test.sh|fm-spawn-trim-line.test.sh|fm-memory-append-law.test.sh|\
+    fm-compact-keep.test.sh|fm-logbook.test.sh|fm-crew-vitals.test.sh|fm-trim-event.test.sh|fm-task-card.test.sh|fm-brief-doors.test.sh|fm-lead-steer.test.sh|fm-spawn-fresh-head.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
@@ -577,6 +577,7 @@ tests/fm-compact-lib.test.sh 400
 tests/fm-composer-matrix-live-e2e.test.sh 23
 tests/fm-control-relaunch.test.sh 48210
 tests/fm-control.test.sh 37798
+tests/fm-crew-signals.test.sh 23000
 tests/fm-crew-vitals.test.sh 2500
 tests/fm-cursor-harness.test.sh 30103
 tests/fm-cursor-primary-live-e2e.test.sh 21
@@ -601,6 +602,9 @@ tests/fm-herdr-version-floor-live-e2e.test.sh 23
 tests/fm-home-summary-refresh.test.sh 34793
 tests/fm-inactive-reconcile.test.sh 41826
 tests/fm-kimi-harness.test.sh 18015
+tests/fm-lead-route-up.test.sh 70000
+tests/fm-lead-steer.test.sh 9000
+tests/fm-memory-append-law.test.sh 10000
 tests/fm-lint-workflows.test.sh 855
 tests/fm-logbook.test.sh 8000
 tests/fm-muse-harness.test.sh 55572
@@ -619,6 +623,7 @@ tests/fm-pr-check-security.test.sh 160475
 tests/fm-procevent-quota.test.sh 1949
 tests/fm-procevent-when.test.sh 17392
 tests/fm-procevent.test.sh 69715
+tests/fm-progress.test.sh 3000
 tests/fm-project-origin.test.sh 137
 tests/fm-public-followup.test.sh 196745
 tests/fm-quota-array-dispatch-live-e2e.test.sh 21
@@ -641,6 +646,7 @@ tests/fm-secondmate-safety.test.sh 57689
 tests/fm-secondmate-sync.test.sh 17183
 tests/fm-send-inbox-doorbell-live-e2e.test.sh 22
 tests/fm-send-inbox.test.sh 38956
+tests/fm-send-led-channel.test.sh 18000
 tests/fm-send-remote-delivery.test.sh 27686
 tests/fm-send-resolve-key.test.sh 19619
 tests/fm-send-secondmate-marker-herdr-e2e.test.sh 51
@@ -653,6 +659,7 @@ tests/fm-sessionstart-instruction-refresh-live-e2e.test.sh 22
 tests/fm-sessionstart-nudge.test.sh 66194
 tests/fm-shared-captain-inheritance.test.sh 6108
 tests/fm-spawn-dispatch-profile.test.sh 63996
+tests/fm-spawn-fresh-head.test.sh 12000
 tests/fm-spawn-leader-chain.test.sh 24000
 tests/fm-spawn-pool-base-freshen.test.sh 34920
 tests/fm-spawn-trim-line.test.sh 30000

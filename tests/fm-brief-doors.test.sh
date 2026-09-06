@@ -9,10 +9,16 @@
 # pushback before beginning (needs-decision [key=story-size]) and the stuck
 # door (blocked [key=stuck]), answered in the inbox by the leader that
 # --leader names, or by First Mate when there is none. --leader accepts only
-# a task recorded with leads=1 in this home's state. The crewmate contract
-# paragraph says who the crewmate reports to, the landing order on a project
+# a task recorded with leads=1 in this home's state. Rule 6 asks for that same
+# keyed shape, the only one bin/fm-lead-relay.sh and bin/fm-watch.sh can route
+# to a leader. The crewmate contract paragraph says who the crewmate reports
+# to, the landing order on a project
 # that runs the loop, and the three commands never run on a session's own
-# judgement. A secondmate charter carries none of it.
+# judgement. A secondmate charter carries none of it. --leads appends "# You
+# lead crewmates" to a ship or scout brief, opening with "Read
+# docs/branch-leader.md before your first steer"; a brief without --leads never
+# mentions the playbook, so the playbook is read by the one crewmate whose job
+# it is and by nobody else.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -64,8 +70,14 @@ test_ship_and_scout_briefs_carry_the_two_doors() {
     assert_contains "$section" "First Mate answers in your inbox." "$id: without a leader, First Mate answers"
     assert_not_contains "$section" "Your leader" "$id: no leader is named when none was given"
     [ "$(printf '%s\n' "$section" | grep -c -E 'key=')" -eq 2 ] || fail "$id: exactly two keyed doors, got:"$'\n'"$section"
+    # One shape for blocked in the whole brief: every instruction to write a
+    # blocked line (the door, rule 4, rule 5, rule 7, the isolation stop) is
+    # the keyed stuck door, so whoever answers closes each with one key.
+    [ "$(grep -c 'blocked: ' "$brief")" -ge 4 ] || fail "$id: the brief's blocked instructions, got:"$'\n'"$(grep -n 'blocked: ' "$brief")"
+    [ "$(grep -c 'blocked: ' "$brief")" -eq "$(grep -c 'blocked: \[key=stuck\] ' "$brief")" ] \
+      || fail "$id: blocked is spelled one way, the keyed stuck door, got:"$'\n'"$(grep -n 'blocked: ' "$brief" | grep -v 'key=stuck')"
   done
-  pass "every ship mode and the scout scaffold carry the two doors right after the story, keyed story-size and stuck, with this task's status file, answered by First Mate when no leader is named"
+  pass "every ship mode and the scout scaffold carry the two doors right after the story, keyed story-size and stuck, with this task's status file, answered by First Mate when no leader is named; blocked is spelled one way in the whole brief"
 }
 
 # --- 2. --leader names a recorded leader, refuses anything else --------------
@@ -80,7 +92,7 @@ test_leader_is_named_and_must_be_a_recorded_leader() {
   section=$(doors_section "$brief")
   assert_contains "$section" "Your leader, \`lead-a\`, answers in your inbox; First Mate reaches you there only with lifecycle and the captain's words." "the leader is named as the one who answers"
   assert_not_contains "$section" "First Mate answers in your inbox." "with a leader, First Mate is not the one who answers"
-  assert_contains "$(cat "$brief")" "same obstacle twice, append \`blocked: {why}\` and stop; your leader will help." "rule 5 names the leader"
+  assert_contains "$(cat "$brief")" "same obstacle twice, append \`blocked: [key=stuck] {why}\` and stop; your leader will help." "rule 5 names the leader"
   assert_contains "$(cat "$brief")" "Your leader will reply with the decision." "rule 6 names the leader"
   assert_contains "$(cat "$brief")" "Your leader (\`lead-a\`) steers you through durable message files" "the inbox section names the leader as the one who steers"
   assert_contains "$(cat "$brief")" "First Mate reaches this inbox only with lifecycle actions and the captain's words." "the inbox section limits First Mate to lifecycle and the captain's words"
@@ -119,9 +131,11 @@ test_crewmate_contract_paragraph() {
     assert_contains "$section" "On a project that runs the loop, land work in its order: \`session\` first, then push your branch, \`preview\`, get a reading, append your ready line, and STOP before \`stage\`" "$id: the landing order"
     assert_contains "$section" "Never run \`release\`, \`gc --prune\` or \`gc --abandon\` on your own judgement: only on the captain's word, carried in this brief or given in the conversation you are in." "$id: the three commands"
     assert_contains "$section" "On a project without that loop, the Definition of done below is the whole landing." "$id: a project without the loop"
-    [ "$(printf '%s\n' "$section" | grep -c -v '^#' | tr -d ' ')" -le 6 ] || fail "$id: the contract is one short paragraph, got:"$'\n'"$section"
+    assert_contains "$section" "Before you believe a clean result from a check you wrote, plant a fault and watch it go red." "$id: plant a fault before believing a clean result"
+    assert_contains "$section" "Write your DONE lines and your progress report without commit ids in the first place: name what changed for a person, not the commit that carried it." "$id: the writer keeps commit ids out of the report"
+    [ "$(printf '%s\n' "$section" | grep -c -v '^#' | tr -d ' ')" -le 7 ] || fail "$id: the contract is one short paragraph, got:"$'\n'"$section"
   done
-  pass "every ship mode and the scout scaffold carry the crewmate contract: report to your leader or First Mate never the captain, the landing order with STOP before stage, release and gc never on the session's own judgement"
+  pass "every ship mode and the scout scaffold carry the crewmate contract: report to your leader or First Mate never the captain, the landing order with STOP before stage, release and gc never on the session's own judgement, plant a fault before believing a clean result, and DONE lines written without commit ids"
 }
 
 # --- 4. the crewmate knows its own id and brief; reads long files through a sub-agent ---
@@ -166,10 +180,120 @@ test_no_machinery_words_and_the_charter_is_untouched() {
   pass "no ship, scout or led brief says trim, compact, context window, token, budget, ledger or telemetry; a secondmate charter carries no doors and no contract"
 }
 
+# --- 6. --leads: a leader's brief points at the playbook; nothing else does ----
+test_leads_brief_points_at_the_playbook_and_nothing_else_does() {
+  local home id brief section first line_after_doors
+  make_home leads; home=$HOME_DIR
+  fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
+  for id_args in "l1:--mode no-mistakes" "l2:--mode direct-PR" "l3:--mode local-only" "l4:--scout"; do
+    id=${id_args%%:*}
+    # shellcheck disable=SC2086  # the args are a fixed word list
+    scaffold "$home" "$id" proj ${id_args#*:} --leads
+    [ "$RC" -eq 0 ] || fail "$id: a --leads scaffold must exit 0:"$'\n'"$OUT"
+    brief="$home/data/$id/brief.md"
+    [ "$(grep -c -x '# You lead crewmates' "$brief")" -eq 1 ] || fail "$id: exactly one leader section, got $(grep -c -x '# You lead crewmates' "$brief")"
+    section=$(awk '/^# You lead crewmates$/{f=1; print; next} f && /^# /{exit} f' "$brief")
+    first=$(printf '%s\n' "$section" | sed -n 2p)
+    case "$first" in
+      "Read docs/branch-leader.md before your first steer"*) ;;
+      *) fail "$id: the leader section opens with the trigger sentence, got: $first" ;;
+    esac
+    assert_contains "$section" "\`$ROOT/docs/branch-leader.md\`" "$id: the playbook's absolute path, so the leader can open it from its worktree"
+    assert_contains "$section" "up to four crewmates" "$id: the section says what leading is"
+    # the leader section follows the crewmate's own doors: a leader is a crewmate too
+    line_after_doors=$(awk '/^# Your story, and the two times you speak up$/{f=1; next} f && /^# /{print; exit}' "$brief")
+    [ "$line_after_doors" = "# You lead crewmates" ] || fail "$id: the leader section must follow the doors, got '$line_after_doors'"
+    [ "$(grep -o 'branch-leader.md' "$brief" | wc -l | tr -d ' ')" -eq 2 ] || fail "$id: the playbook is named twice, the trigger and the path, and nowhere else; got $(grep -o 'branch-leader.md' "$brief" | wc -l | tr -d ' ')"
+  done
+  # every brief without --leads, led or not, and the charter: not one word
+  for id_args in "n1:--mode no-mistakes" "n2:--mode direct-PR" "n3:--mode local-only" "n4:--scout" "n5:--mode no-mistakes --leader lead-a" "n6:--scout --leader lead-a"; do
+    id=${id_args%%:*}
+    # shellcheck disable=SC2086  # the args are a fixed word list
+    scaffold "$home" "$id" proj ${id_args#*:}
+    [ "$RC" -eq 0 ] || fail "$id: scaffold must exit 0:"$'\n'"$OUT"
+    brief="$home/data/$id/brief.md"
+    ! grep -q -i 'branch-leader' "$brief" || fail "$id: a brief without --leads must never mention the playbook, got: $(grep -n -i 'branch-leader' "$brief")"
+    assert_not_contains "$(cat "$brief")" "You lead crewmates" "$id: a brief without --leads has no leader section"
+  done
+  FM_SECONDMATE_CHARTER='Supervise the proj domain.' scaffold "$home" sm3 --secondmate proj
+  [ "$RC" -eq 0 ] || fail "a secondmate charter must still scaffold:"$'\n'"$OUT"
+  ! grep -q -i 'branch-leader' "$home/data/sm3/brief.md" || fail "a charter never mentions the playbook"
+  # The always-loaded rulebook's own wording is deliberately not asserted here:
+  # a document's text is not behaviour, and what a crewmate receives is the
+  # generated brief above.
+  # refusals: a led crewmate cannot lead; a charter is not a leader of this home
+  scaffold "$home" r1 proj --mode no-mistakes --leads --leader lead-a
+  [ "$RC" -ne 0 ] || fail "--leads with --leader must be refused"
+  assert_contains "$OUT" "--leads cannot be combined with --leader; a chain is one level deep" "the refusal says why"
+  [ ! -e "$home/data/r1/brief.md" ] || fail "a refused --leads scaffold leaves no brief"
+  scaffold "$home" r2 --secondmate proj --leads
+  [ "$RC" -ne 0 ] || fail "--leads on a secondmate charter must be refused"
+  assert_contains "$OUT" "--leads applies only to crewmate ship or scout briefs" "the charter refusal says where --leads applies"
+  [ ! -e "$home/data/r2/brief.md" ] || fail "a refused --leads charter leaves no brief"
+  pass "--leads appends the leader section after the doors, opening with 'Read docs/branch-leader.md before your first steer' and the playbook's absolute path, on every ship mode and the scout; no brief without --leads, led or not, nor the charter, names the playbook; --leads with --leader and on a charter are refused"
+}
+
+# --- 7. one shape for a decision: rule 6 teaches the keyed line ---------------
+# A crewmate's decision reaches its leader only through the [key=<slug>] token:
+# bin/fm-lead-relay.sh and bin/fm-watch.sh both gate on
+# status_line_decision_key, which refuses an unkeyed line, so a crewmate that
+# followed an unkeyed rule 6 would stop with nobody told. The proof runs on the
+# GENERATED brief - the thing that actually reaches a worker - and feeds the
+# PAIR of lines that brief teaches, AS THEY ARE WRITTEN THERE - the one that
+# opens the decision and the one that closes it - to the reader that routes it
+# and to the fold that holds the open set. An example is for copying, so a
+# literal copy has to work end to end: nothing is substituted into either line
+# here but the words the crewmate would write in its own place.
+test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about() {
+  local home id brief taught line key want open log closing
+  make_home decision; home=$HOME_DIR
+  fm_write_meta "$home/state/lead-a.meta" "window=firstmate:fm-lead-a" "kind=ship" "leads=1"
+  for id_args in "q1:--mode no-mistakes" "q2:--scout" "q3:--mode no-mistakes --leader lead-a" "q4:--scout --leader lead-a"; do
+    id=${id_args%%:*}
+    # shellcheck disable=SC2086  # the args are a fixed word list
+    scaffold "$home" "$id" proj ${id_args#*:}
+    [ "$RC" -eq 0 ] || fail "$id: scaffold must exit 0:"$'\n'"$OUT"
+    brief="$home/data/$id/brief.md"
+    # One shape for a decision in the whole brief, as for blocked: every
+    # instruction to write one carries a key.
+    [ "$(grep -c 'needs-decision: ' "$brief")" -ge 2 ] || fail "$id: the brief's needs-decision instructions, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief")"
+    [ "$(grep -c 'needs-decision: ' "$brief")" -eq "$(grep -c 'needs-decision: \[key=' "$brief")" ] \
+      || fail "$id: needs-decision is spelled one way, the keyed one, got:"$'\n'"$(grep -n 'needs-decision: ' "$brief" | grep -v 'key=')"
+    # And the line rule 6 teaches must actually route AS IT STANDS: take its
+    # key from the brief itself, write only the summary the crewmate would
+    # write, and hand the line to the reader the relay and the watcher key on.
+    taught=$(grep -o 'needs-decision: \[key=[^]]*\] {summary of options}' "$brief" | head -1)
+    [ -n "$taught" ] || fail "$id: rule 6 must teach a keyed decision line, got:"$'\n'"$(grep -n 'needs-decision' "$brief")"
+    want=${taught#*[key=}; want=${want%%]*}
+    line=$(printf '%s' "$taught" | sed 's/{summary of options}/two ways to shape the split, A or B/')
+    key=$(bash -c '. "$1"; status_line_decision_key "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$line") \
+      || fail "$id: the key rule 6's own example carries is not one its leader's reader accepts: '$line'"
+    [ "$key" = "$want" ] || fail "$id: the reader must read the key the example shows ($want), got '$key'"
+    # And a decision must actually OPEN under it: the same whole-log fold every
+    # drain, the relay and the watcher read the open set from.
+    log="$home/data/$id/rule6.status"
+    printf '%s\n' "$line" > "$log"
+    open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+    [ "${open%%$'\t'*}" = "$want" ] || fail "$id: rule 6's example, copied as it stands, must open a decision under $want, got: '$open'"
+    # And the closing line rule 6 teaches, copied the same way onto the same
+    # log, must close that same door: the pair is one worked example or it is
+    # a worse one than none, because a door left open accuses its leader.
+    closing=$(grep -o 'resolved: \[key=[^]]*\] {how it cleared}' "$brief" | head -1)
+    [ -n "$closing" ] || fail "$id: rule 6 must teach a keyed resolved line, got:"$'\n'"$(grep -n 'resolved' "$brief")"
+    printf '%s' "$closing" | sed 's/{how it cleared}/the leader chose B, one story/' >> "$log"
+    printf '\n' >> "$log"
+    open=$(bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$log")
+    [ -z "$open" ] || fail "$id: rule 6's closing line, copied as it stands, must close the door its own opening line opened, still open: '$open'"
+  done
+  pass "rule 6 of every generated ship, scout and led brief teaches a decision line and a closing line whose keys are real: copied as they stand, the first is accepted by the reader the relay and the watcher key on and opens a decision, the second closes that same door, and needs-decision is spelled that one keyed way throughout the brief"
+}
+
 test_ship_and_scout_briefs_carry_the_two_doors
 test_leader_is_named_and_must_be_a_recorded_leader
 test_crewmate_contract_paragraph
 test_identity_line_and_reading_habit
 test_no_machinery_words_and_the_charter_is_untouched
+test_leads_brief_points_at_the_playbook_and_nothing_else_does
+test_rule_six_teaches_a_decision_line_the_leader_can_be_told_about
 
 echo "# all fm-brief-doors tests passed"

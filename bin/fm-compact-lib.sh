@@ -2,11 +2,17 @@
 # bin/fm-compact-lib.sh - the 140K line: where a story crewmate's harness trims
 # its own head, derived in one place.
 #
-# Sourced by bin/fm-spawn.sh (which writes the line into a claude story
-# crewmate's worktree .claude/settings.local.json and records trim_mark= and
-# trim_window= in state/<id>.meta) and by the tests that pin the arithmetic.
-# Nothing else may spell the window or the settings key; a reader that needs
-# the mark behind a recorded window uses fm_compact_mark_of_window.
+# Sourced by bin/fm-spawn.sh (which writes fm_compact_window under
+# FM_COMPACT_SETTINGS_KEY into a claude story crewmate's worktree
+# .claude/settings.local.json and records trim_mark= and trim_window= in
+# state/<id>.meta) and by the tests that pin the arithmetic. The sum and the
+# key are derived here and read through this library, which is what is
+# proved: tests/fm-spawn-trim-line.test.sh reads the settings and the record
+# the spawn writes and compares them with fm_compact_window, and a reader that
+# needs the mark behind a recorded window uses fm_compact_mark_of_window. No
+# test watches the rest of the tree for another spelling of the number (the
+# text-grep test that did was removed in review, against the house rule), so
+# a reader that needs the window takes it from here rather than restating it.
 #
 # The harness law, read from Claude Code 2.1.259's binary on 2026-09-05 and
 # proved live twice on the GLM stand-in (data/epic-crewmate-memory/probes):

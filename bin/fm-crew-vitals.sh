@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
 # bin/fm-crew-vitals.sh - one card per crewmate, read from the outside.
-# Usage: FM_HOME=<home> fm-crew-vitals.sh <task-id> [--line|--json]
-#        FM_HOME=<home> fm-crew-vitals.sh --leader <task-id> [--line|--json]
-#        FM_HOME=<home> fm-crew-vitals.sh --all [--line|--json]
+# Usage: FM_HOME=<home> fm-crew-vitals.sh <task-id> [--line|--json] [--outside]
+#        FM_HOME=<home> fm-crew-vitals.sh --leader <task-id> [--line|--json] [--outside]
+#        FM_HOME=<home> fm-crew-vitals.sh --all [--line|--json] [--outside]
 #   The card is four lines, designed for a leader with four crewmates, not forty:
-#     <id>  <last status event>  head 91K (peak 138K, mark 140K)  trims 1 auto  turns 212
+#     <id>  <last status event>  head 91K (start 60K, peak 138K, mark 140K)  trims 1 auto  turns 212
 #       last call  Bash `bash tests/fm-spawn.test.sh`  40s ago    repeats none
 #       tokens     46K since last commit (82m)   logbook 22m   spend 3.1K/turn
 #       next       "prove the excluded file never lands on the branch"   (logbook)
 #   --line prints the first line only; --json prints every field as one JSON
-#   object per crewmate. --leader lists the crewmates recorded under that
+#   object per crewmate. --outside drops the one field read from the crewmate's
+#   own words - the next line, its logbook's - so the card carries nothing the
+#   crewmate wrote; bin/fm-crew-signals.sh carries that card into a ring.
+#   --leader lists the crewmates recorded under that
 #   leader (the leader= line bin/fm-spawn.sh --leader writes); --all lists every
 #   ship and scout task recorded in this home. A field that cannot be read
 #   prints ? and never a number.
 # What each field reads, and nothing else:
-#   head, peak, turns, trims, last call, repeats, spend: the live transcript,
+#   head, start, peak, turns, trims, last call, repeats, spend: the live transcript,
 #     the newest line of data/<id>/sessions.log (bin/fm-session-event.sh writes
 #     it from the claude SessionStart hook). Every assistant row's usage gives
 #     the head (input + cache creation + cache read + output, the harness's own
-#     count); a turn is one model request (assistant rows sharing one message
+#     count); start is the head at the first request, what the crewmate
+#     carried before any work (the brief, the memory files, the launch);
+#     a turn is one model request (assistant rows sharing one message
 #     id are one turn); a trim is a compact_boundary row, and the head at a
 #     trim is the last assistant usage before that row, never the row's
 #     preTokens (bin/fm-compact-lib.sh says why); spend is the new tokens the
@@ -26,13 +31,31 @@
 #     repeats looks at the last 30 tool calls for the same tool with the same
 #     input three or more times (loop), the same file read five or more times
 #     (reads), or an A-B-A-B alternation four times (alternates).
+#   busy, quiet_for (--json only): whether the transcript's last conversation
+#     row is work in flight (a tool call, or a prompt or tool result the model
+#     has not answered) or a boundary the crewmate now idles at (an assistant
+#     row with no tool call in it, or the harness's own trim summary - a user
+#     row carrying isCompactSummary or isMeta, which follows a trim rather than
+#     asking the model for anything), and the seconds since that row.
+#     bin/fm-crew-signals.sh reads them for its stall signal; the card does not
+#     print them. A crewmate waiting on a live helper is busy: the quiet clock
+#     runs from the LATER of the crewmate's own last conversation row and the
+#     newest sub-agent row, so a long Task does not read as a stall.
+#   A sub-agent's rows are the sub-agent's and never the crewmate's: every row
+#   carrying isSidechain is skipped by the reader that builds head, start,
+#   peak, turns, trims, spend, the last call and repeats, so a helper's reads
+#   are never reported as the crewmate circling and a helper's small head is
+#   never printed as the crewmate's. The `rows` count is a count of physical
+#   transcript rows and still counts them all. The only thing a sub-agent's
+#   row moves is the quiet clock above.
 #   the status word: the state of the last line of state/<id>.status, an
 #     EVENT, not current state; bin/fm-crew-state.sh owns the current state.
 #   mark: trim_mark= in state/<id>.meta; a leader has none by design.
 #   since last commit: the age of HEAD in the task's recorded worktree, and the
 #     spend since that commit's time.
 #   logbook: the age of data/<id>/logbook.md, or untouched while it is still
-#     bin/fm-logbook-lib.sh's template; next: its first line under ## Next.
+#     bin/fm-logbook-lib.sh's template; next: its first line under ## Next, the
+#     one field written by the crewmate, dropped by --outside.
 #   Nothing here reads the crewmate's own report, and nothing here stops,
 #   warns or throttles anyone: the numbers judge the machinery, never the
 #   worker. Stuck, loop and drift verdicts belong to the leader.
@@ -78,6 +101,7 @@ command -v jq >/dev/null 2>&1 || { echo "error: jq is required to read a transcr
 FORMAT=card
 SCOPE=
 TARGET=
+OUTSIDE=0
 want_value=
 for a in "$@"; do
   if [ -n "$want_value" ]; then
@@ -89,6 +113,7 @@ for a in "$@"; do
     --leader) SCOPE=leader; want_value=leader ;;
     --leader=*) SCOPE=leader; TARGET=${a#--leader=} ;;
     --all) SCOPE=all ;;
+    --outside) OUTSIDE=1 ;;
     --*) echo "error: unknown argument '$a'; see fm-crew-vitals.sh --help" >&2; exit 1 ;;
     *)
       [ -z "$TARGET" ] && [ -z "$SCOPE" ] || { echo "error: one task id, or --leader <id>, or --all" >&2; exit 1; }
@@ -155,7 +180,10 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
     # The salient part of a call: the command, the file (with its offset, so a
     # big file read in chunks is not a repeat), the pattern, the prompt, else
     # the whole input. A tool description the model rewrites each time is not
-    # part of it.
+    # part of it. Every control byte in it becomes a space: this is what the
+    # repeats field carries, and bin/fm-crew-signals.sh uses that field as its
+    # loop signature - one field of a tab-separated ledger row - so a newline
+    # or a tab inside it would split the row and the episode could never close.
     def salient(t):
       (t.input // {}) as $i
       | if ($i.command? // null) != null then ($i.command | tostring)
@@ -163,19 +191,24 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
         elif ($i.pattern? // null) != null then ($i.pattern | tostring)
         elif ($i.prompt? // null) != null then ($i.prompt | tostring)
         else ($i | tojson) end
-      | gsub("\n"; " ");
+      | gsub("[[:cntrl:]]"; " ");
     def sig(t): (t.name // "?") + " " + salient(t);
     def file_of(t): ((t.input // {}).file_path // "") | tostring;
     def short(t): salient(t) | .[0:60];
     def epoch_or_null($s): if $s == "" then null else ($s | tonumber) end;
     reduce (inputs | fromjson? // empty) as $r (
-      {head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
-       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_head_before_boundary: null};
+      {head: null, first_head: null, peak: 0, turns: 0, spend: 0, spend_since_commit: 0, spend_since_logbook: 0,
+       last_msg: null, last_ts: null, trims: [], calls: [], rows: 0, last_conv: null,
+       helper_ts: null};
       .rows += 1
-      | if $r.type == "assistant" and ($r.message.usage? // null) != null then
+      | if ($r.isSidechain // false) == true then
+          (($r | ts)) as $st
+          | (if $st != null and (.helper_ts == null or $st > .helper_ts) then .helper_ts = $st else . end)
+        elif $r.type == "assistant" and ($r.message.usage? // null) != null then
           ($r.message.usage) as $u
           | (total($u)) as $t
           | .head = $t
+          | .first_head = (if .first_head == null then $t else .first_head end)
           | .peak = (if $t > .peak then $t else .peak end)
           | .last_ts = (($r | ts) // .last_ts)
           | (($r.message.id // $r.uuid // null)) as $mid
@@ -191,6 +224,9 @@ read_transcript() {  # <path> <commit-epoch|""> <logbook-epoch|"">
             else . end
           | .calls += [ ($r.message.content // []) | if type == "array" then map(select(.type == "tool_use") | {name: (.name // "?"), sig: sig(.), file: file_of(.), short: short(.), ts: ($r | ts)}) else [] end ] | .calls |= flatten
           | .calls |= (if length > 30 then .[-30:] else . end)
+          | .last_conv = {kind: (if (($r.message.content // []) | if type == "array" then map(select(.type == "tool_use")) | length else 0 end) > 0 then "call" else "turn" end), ts: ($r | ts)}
+        elif $r.type == "user" then
+          .last_conv = {kind: (if ($r.isCompactSummary // false) or ($r.isMeta // false) then "boundary" else "input" end), ts: ($r | ts)}
         elif $r.type == "system" and $r.subtype == "compact_boundary" then
           .trims += [{trigger: ($r.compactMetadata.trigger // "?"), head_before: .head, pre: ($r.compactMetadata.preTokens // null), post: ($r.compactMetadata.postTokens // null), ts: ($r | ts)}]
         else . end
@@ -236,7 +272,7 @@ vitals_json() {  # <id> -> one JSON object on stdout
       logbook_state=untouched
     else
       logbook_state=written
-      next=$(awk '/^## Next/{f=1; next} /^## /{f=0} f && NF {print; exit}' "$logbook" | sed 's/^[-*] *//')
+      [ "$OUTSIDE" -eq 1 ] || next=$(awk '/^## Next/{f=1; next} /^## /{f=0} f && NF {print; exit}' "$logbook" | sed 's/^[-*] *//')
     fi
   fi
   transcript=$(live_transcript "$id")
@@ -255,12 +291,17 @@ vitals_json() {  # <id> -> one JSON object on stdout
       status: $status,
       transcript: (if $transcript == "" then null else $transcript end),
       head: ($t.head // null),
+      start: ($t.first_head // null),
       peak: (if $t == null then null else $t.peak end),
       mark: (num($mark)),
       turns: (if $t == null then null else $t.turns end),
       trims: (if $t == null then null else ($t.trims | map({trigger, head_before, pre, post, ts})) end),
       last_call: (if $t == null then null else $t.last_call end),
       last_call_age: (if $t == null or $t.last_call == null or $t.last_call.ts == null then null else ($now - $t.last_call.ts) end),
+      busy: (if $t == null or $t.last_conv == null then null else ($t.last_conv.kind == "call" or $t.last_conv.kind == "input") end),
+      quiet_for: (if $t == null or $t.last_conv == null or $t.last_conv.ts == null then null
+                  else ($now - (if ($t.helper_ts // null) != null and $t.helper_ts > $t.last_conv.ts
+                                then $t.helper_ts else $t.last_conv.ts end)) end),
       repeats: (if $t == null then null else $t.repeats end),
       spend: (if $t == null then null else $t.spend end),
       spend_per_turn: (if $t == null or $t.turns == 0 then null else (($t.spend / $t.turns) | floor) end),
@@ -278,11 +319,12 @@ vitals_json() {  # <id> -> one JSON object on stdout
 }
 
 print_card() {  # <json> <card|line>
-  local j=$1 fmt=$2 id status head peak mark turns trims_n trims_auto trims_manual trims_word
+  local j=$1 fmt=$2 id status head start peak mark turns trims_n trims_auto trims_manual trims_word
   local call_name call_short call_age rep_kind rep_n rep_what rep_word spend_c commit_age logbook logbook_age rate next
   id=$(printf '%s' "$j" | jq -r '.id')
   status=$(printf '%s' "$j" | jq -r '.status')
   head=$(k_of "$(printf '%s' "$j" | jq -r '.head // empty')")
+  start=$(k_of "$(printf '%s' "$j" | jq -r '.start // empty')")
   peak=$(k_of "$(printf '%s' "$j" | jq -r '.peak // empty')")
   mark=$(printf '%s' "$j" | jq -r '.mark // empty')
   if [ -n "$mark" ]; then mark=$(k_of "$mark"); else mark=none; fi
@@ -299,7 +341,7 @@ print_card() {  # <json> <card|line>
     elif [ "$trims_auto" -eq 0 ]; then trims_word="$trims_n manual"
     else trims_word="$trims_n ($trims_auto auto, $trims_manual manual)"; fi
   fi
-  printf '%s  %s  head %s (peak %s, mark %s)  trims %s  turns %s\n' "$id" "$status" "$head" "$peak" "$mark" "$trims_word" "$turns"
+  printf '%s  %s  head %s (start %s, peak %s, mark %s)  trims %s  turns %s\n' "$id" "$status" "$head" "$start" "$peak" "$mark" "$trims_word" "$turns"
   [ "$fmt" = line ] && return 0
   call_name=$(printf '%s' "$j" | jq -r '.last_call.name // empty')
   if [ -n "$call_name" ]; then
@@ -326,6 +368,7 @@ print_card() {  # <json> <card|line>
   esac
   rate=$(k_of "$(printf '%s' "$j" | jq -r '.spend_per_turn // empty')")
   printf '  tokens     %s since last commit (%s)   logbook %s   spend %s/turn\n' "$spend_c" "$commit_age" "$logbook_age" "$rate"
+  [ "$OUTSIDE" -eq 0 ] || return 0
   next=$(printf '%s' "$j" | jq -r '.next // empty')
   if [ -n "$next" ]; then
     printf '  next       "%s"   (logbook)\n' "$next"

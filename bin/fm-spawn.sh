@@ -58,7 +58,10 @@
 #   later --leader may name, and no trim line (below), because the epic's whole
 #   shape lives in the leader's head. Ship and scout spawns only; refused with
 #   --leader (a chain is one level deep) and with --relaunch (the record's role
-#   stands). Echoed as leads=1 on the success line.
+#   stands). Echoed as leads=1 on the success line. A leader's brief comes from
+#   fm-brief.sh --leads, which tells it to read docs/branch-leader.md before its
+#   first steer; a --leads spawn whose brief lacks that sentence is launched as
+#   given with a warning, never refused.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -255,13 +258,29 @@
 # A claude ship or scout crewmate that is not a leader is a story crewmate: its
 # worktree .claude/settings.local.json also carries the one settings key that
 # moves the harness's automatic trim to the captain's 140K line, derived in
-# bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; the sum
-# is never spelled here), and its record says so with trim_mark=140000 and
-# trim_window=<that sum>. Both are owned keys rewritten by every launch, so a
-# relaunch onto a harness without the key drops the claim; a harness without the
-# key, a leader, and a secondmate get neither line nor claim. Nothing stops,
-# warns, or throttles the crewmate: the harness trims every session somewhere,
-# and this only moves that point.
+# bin/fm-compact-lib.sh (140000 + 20000 reserved output + 13000 margin; this
+# script reads fm_compact_window rather than restating the sum), and its
+# record says so with trim_mark=140000 and trim_window=<that sum>. Both are
+# owned keys rewritten by every launch, so a relaunch onto a harness without
+# the key drops the claim; a harness without the key, a leader, and a
+# secondmate get neither line nor claim. Nothing stops, warns, or throttles
+# the crewmate: the harness trims every session somewhere, and this only
+# moves that point.
+# The fresh head: when the claude crewmate's or leader's checkout is the
+# firstmate repo itself (AGENTS.md opening "# Firstmate", CLAUDE.md its
+# pointer), the same settings file carries claudeMdExcludes for the worktree's
+# CLAUDE.md, so First Mate's job description never enters the crewmate's head
+# (measured on 2.1.259: 15.6K tokens off the first request); every other
+# project's memory files load as before. Every launch also measures the brief
+# (bytes and a four-bytes-a-token estimate) on stderr and warns above 6K
+# tokens without refusing it.
+# The door relay: a led claude crewmate's Stop hook also runs
+# bin/fm-lead-relay.sh <home> <id> after the busy-event writer, so each new
+# keyed door line it appends (needs-decision [key=story-size], blocked
+# [key=stuck]) reaches its leader's steering inbox the second the turn ends
+# and is written into data/<id>/doors/index, the ledger bin/fm-watch.sh reads
+# to hold that wake for First Mate while the leader lives. An unled crewmate's
+# hook is exactly as before.
 # When the home session's frozen trace-context decision is enabled (see
 # docs/configuration.md and bin/fm-trace-context-lib.sh), the meta also records
 # one W3C traceparent= carrier, the same value injected into the pane as
@@ -2071,6 +2090,29 @@ if [ -n "$SPAWN_LEADER" ] && grep -q -x 'First Mate answers in your inbox.' "$BR
   exit 1
 fi
 
+# A leader's brief points at the playbook. fm-brief.sh --leads appends "# You
+# lead crewmates", opening with "Read docs/branch-leader.md before your first
+# steer"; a leader spawned (or relaunched) with a brief that lacks the
+# sentence - hand-written, or scaffolded without --leads - is launched as
+# given with one warning, never refused: the brief is First Mate's to write,
+# and leads=1 in the record is what the chain checks. Measured, never
+# enforced. A spawn that does not lead has nothing to be warned about.
+if [ "$LEADS" -eq 1 ] && ! grep -q -i 'read docs/branch-leader.md before your first steer' "$BRIEF"; then
+  echo "warning: $ID is spawned as a branch leader (--leads) but its brief does not say to read docs/branch-leader.md before its first steer; scaffold it with bin/fm-brief.sh $ID <repo> --mode <mode> --leads (or --scout --leads) so the leader reads the playbook; launching as given" >&2
+fi
+
+# The brief's size is measured, never enforced: the crewmate carries the
+# whole brief from its first turn (four bytes a token is the harness's own
+# rough rule), so First Mate sees the number at every spawn and a warning
+# above 6K tokens; nothing here refuses a big brief.
+BRIEF_BYTES=$(wc -c < "$BRIEF" | tr -d ' ')
+case "$BRIEF_BYTES" in ''|*[!0-9]*) BRIEF_BYTES=0 ;; esac
+BRIEF_TOKENS=$((BRIEF_BYTES / 4))
+echo "brief $ID: $BRIEF_BYTES bytes (~$BRIEF_TOKENS tokens)" >&2
+if [ "$BRIEF_TOKENS" -gt 6000 ]; then
+  echo "warning: the brief for $ID is ~$BRIEF_TOKENS tokens, over 6K tokens; the crewmate reads all of it before its first turn (measured, not refused)" >&2
+fi
+
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -2880,7 +2922,17 @@ if [ "$KIND" != secondmate ]; then
       busy_cmd_prefix="$(shell_quote "$FM_ROOT/bin/fm-busy-event.sh") apply $(shell_quote "$STATE_REAL") $(shell_quote "$ID")"
       busy_suffix="--gen $(shell_quote "$BUSY_GEN") --source claude-hook"
       j_submit=$(json_escape "$busy_cmd_prefix busy $busy_suffix --event user-prompt-submit 2>/dev/null || true")
-      j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
+      # The chain's door relay (bin/fm-lead-relay.sh): a led crewmate's Stop
+      # hook, after the busy-event writer, puts each new keyed door line
+      # (needs-decision [key=story-size], blocked [key=stuck]) into its
+      # leader's steering inbox and its own door ledger, so the leader hears
+      # the door the second the turn ends and the watcher can hold the wake
+      # for First Mate. Wired for a led crewmate only (spawn or relaunch, from
+      # SPAWN_LEADER), so an unled crewmate's hook is exactly as before; the
+      # relay prints nothing and exits 0 on every path.
+      relay_cmd=
+      [ -z "$SPAWN_LEADER" ] || relay_cmd="; $(shell_quote "$FM_ROOT/bin/fm-lead-relay.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true"
+      j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true$relay_cmd")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
       # Session record (bin/fm-session-event.sh): every source that begins a
@@ -2925,8 +2977,22 @@ if [ "$KIND" != secondmate ]; then
       # summary. Leaders included; the card's own words name none of the
       # machinery.
       j_taskcard=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-task-card.sh") $(shell_quote "$FM_HOME") $(shell_quote "$ID") 2>/dev/null || true")
+      # The fresh head: a checkout of the firstmate repo itself (AGENTS.md
+      # opening "# Firstmate", CLAUDE.md its pointer) would put First Mate's
+      # whole job description into the crewmate's head at every start and
+      # after every trim, though none of it is the crewmate's job. The
+      # harness's claudeMdExcludes (absolute paths, matched against the memory
+      # file's path before it is read, so the import inside it never loads)
+      # skips that one file; every other project's memory files stay. Leaders
+      # included: the brief and the coding-guidelines skill carry what a
+      # firstmate-repo crewmate needs.
+      j_memex=
+      if [ -f "$WT/AGENTS.md" ] && [ -f "$WT/CLAUDE.md" ] \
+        && [ "$(head -n 1 "$WT/AGENTS.md" 2>/dev/null)" = "# Firstmate" ]; then
+        j_memex=",\"claudeMdExcludes\":[\"$(json_escape "$WT/CLAUDE.md")\"]"
+      fi
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]},{"matcher":"compact","hooks":[{"type":"command","command":"$j_taskcard"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim}
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}],"SessionStart":[{"matcher":"startup|resume|clear|fork","hooks":[{"type":"command","command":"$j_sessionstart"}]},{"matcher":"compact","hooks":[{"type":"command","command":"$j_taskcard"}]}],"PreCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_precompact"}]}],"PostCompact":[{"matcher":"auto|manual","hooks":[{"type":"command","command":"$j_postcompact"}]}]}$j_trim$j_memex}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;

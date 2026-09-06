@@ -12,8 +12,8 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--leader <task-id>]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--leader <task-id>]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--leader <task-id>|--leads]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--leader <task-id>|--leads]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -55,7 +55,10 @@
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
-# blocked when firstmate must act.
+# blocked when whoever answers the crewmate must act. A crewmate brief spells
+# blocked one way only, the keyed stuck door (`blocked: [key=stuck] ...`), in
+# the doors section, rule 4, rule 5, rule 7 and the isolation stop alike, so
+# every such line is one door whoever answers closes with --resolve-key stuck.
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
@@ -79,11 +82,22 @@
 # home's state (bin/fm-spawn.sh --leads), and bin/fm-spawn.sh refuses a
 # spawn whose --leader disagrees with the brief. Without --leader, First
 # Mate answers. A secondmate charter takes no --leader.
+# --leads scaffolds a branch leader's brief: right after the doors it appends
+# "# You lead crewmates", whose first sentence is "Read docs/branch-leader.md
+# before your first steer", with the playbook's absolute path and what leading
+# is. That section is the only place a generated brief names the playbook: a
+# brief without --leads, led or not, and a secondmate charter never mention it
+# (tests/fm-brief-doors.test.sh proves both over the scaffolded briefs), so
+# the playbook reaches the one crewmate whose job it is. Refused with --leader (a chain is
+# one level deep) and on a secondmate charter. The spawn's --leads records the
+# role; bin/fm-spawn.sh warns, never refuses, when a --leads spawn's brief
+# lacks the sentence.
 # They also carry the crewmate contract paragraph ("# Crewmate contract"):
 # report to your leader or First Mate, never the captain; on a project that
 # runs the loop, land in its order (session, push, preview, reading, the
 # ready line, STOP before stage); never run release, gc --prune or
-# gc --abandon on the session's own judgement. Nothing in a generated brief
+# gc --abandon on the session's own judgement; plant a fault before believing
+# a clean result from a check you wrote. Nothing in a generated brief
 # names the machinery that measures the crewmate from outside
 # (tests/fm-brief-doors.test.sh keeps it that way).
 # Refuses to overwrite an existing brief.
@@ -144,6 +158,7 @@ MODE=
 MODE_SET=0
 LEADER=
 LEADER_SET=0
+LEADS=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -168,6 +183,7 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --leader) want_value=leader ;;
     --leader=*) LEADER=${a#--leader=}; LEADER_SET=1 ;;
+    --leads) LEADS=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -226,6 +242,13 @@ if [ "$LEADER_SET" -eq 1 ]; then
     echo "error: $LEADER was not spawned as a leader (--leads); a crewmate's leader must be recorded with leads=1" >&2
     exit 1
   fi
+fi
+# --leads is a ship or scout brief for a branch leader, the same refusals as
+# the spawn's --leads: a led crewmate cannot lead, and a charter is not a
+# leader of this home's crewmates.
+if [ "$LEADS" -eq 1 ]; then
+  [ "$LEADER_SET" -eq 0 ] || { echo "error: --leads cannot be combined with --leader; a chain is one level deep, so a led crewmate cannot lead" >&2; exit 1; }
+  [ "$KIND" != secondmate ] || { echo "error: --leads applies only to crewmate ship or scout briefs; a second mate leads its own home's crewmates" >&2; exit 1; }
 fi
 
 BRIEF="$DATA/$ID/brief.md"
@@ -304,17 +327,41 @@ Read long files and long command output through a sub-agent that returns only wh
 EOF
 DOORS_SECTION=${DOORS_SECTION%$'\n'}
 
+# A branch leader's section (--leads), appended right after the doors: a
+# leader is a crewmate too, with the same doors upward, and then the one
+# thing it must do before it steers anyone. The playbook,
+# docs/branch-leader.md, is named here and in no other brief this script
+# scaffolds (tests/fm-brief-doors.test.sh keeps that much, over the generated
+# briefs themselves); the always-loaded rulebook's own wording is a convention
+# nothing here asserts, because a document's text is not behaviour. The
+# sentence "Read docs/branch-leader.md before your first steer" is what
+# bin/fm-spawn.sh looks for on a --leads spawn.
+if [ "$LEADS" -eq 1 ]; then
+  IFS= read -r -d '' LEADS_SECTION <<EOF || true
+# You lead crewmates
+Read docs/branch-leader.md before your first steer: \`$FM_ROOT/docs/branch-leader.md\` is the branch leader's playbook, what you do at each of your moments as a leader (a crewmate's door, a checkpoint, a signal, a steer, the progress report) and which script does the reading.
+You brief and spawn up to four crewmates of your own, each with \`--leader $ID\`, answer their two doors in their inboxes, keep your own logbook for the epic's shape, and report to First Mate the way any crewmate does.
+EOF
+  LEADS_SECTION=${LEADS_SECTION%$'\n'}
+  DOORS_SECTION="$DOORS_SECTION"$'\n\n'"$LEADS_SECTION"
+fi
+
 # The crewmate contract, project-agnostic: who the crewmate reports to, the
 # landing order on a project that runs the loop (session, push, preview,
-# reading, the ready line, STOP before stage), and the three commands a
-# session never runs on its own judgement. One paragraph; the brief carries
-# it because a project's own rulebook may not reach the session.
+# reading, the ready line, STOP before stage), the three commands a session
+# never runs on its own judgement, the proof habit (plant a fault before
+# believing a clean result from a check you wrote), and the writer's rule that
+# keeps commit ids out of a report before any stripper has to. One paragraph;
+# the brief carries it because a project's own rulebook may not reach the
+# session.
 IFS= read -r -d '' CONTRACT_SECTION <<EOF || true
 # Crewmate contract
 You report to your leader or to First Mate, never to the captain: what you have to say goes in your status file, your logbook or your report, and the answer comes back in your inbox.
 On a project that runs the loop, land work in its order: \`session\` first, then push your branch, \`preview\`, get a reading, append your ready line, and STOP before \`stage\`; staging and everything after it are decided above you.
 Never run \`release\`, \`gc --prune\` or \`gc --abandon\` on your own judgement: only on the captain's word, carried in this brief or given in the conversation you are in.
 On a project without that loop, the Definition of done below is the whole landing.
+Before you believe a clean result from a check you wrote, plant a fault and watch it go red.
+Write your DONE lines and your progress report without commit ids in the first place: name what changed for a person, not the commit that carried it.
 EOF
 CONTRACT_SECTION=${CONTRACT_SECTION%$'\n'}
 
@@ -493,15 +540,16 @@ The report is the only thing that survives, so anything worth keeping must be in
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset):
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
-   treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; $HELPER.
+   treating it as a possible wedge. Use \`blocked: [key=stuck] {why}\` when you are stuck and need help.
+5. If you hit the same obstacle twice, append \`blocked: [key=stuck] {why}\` and stop; $HELPER.
 6. If a decision belongs to a human (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. $REPLIER.
+   append \`needs-decision: [key=decision] {summary of options}\` and stop. $REPLIER.
+   Name a more specific key of your own instead - \`[key=story-size]\` - when more than one decision is open at once.
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: [key=decision] {how it cleared}\` yourself as you resume, always carrying the exact key you opened it under (\`[key=stuck]\` for a blocker).
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+   daemon error, append \`blocked: [key=stuck] {the daemon error}\` and stop; only firstmate manages the daemon.
 
 $INBOX_SECTION
 
@@ -557,7 +605,7 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
-If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: [key=stuck] launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
@@ -580,16 +628,17 @@ $RULE1
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
-   cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; $HELPER.
+   cadence instead of treating it as a possible wedge. Use \`blocked: [key=stuck] {why}\` when you are stuck and need help.
+5. If you hit the same obstacle twice, append \`blocked: [key=stuck] {why}\` and stop; $HELPER.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. $REPLIER.
+   append \`needs-decision: [key=decision] {summary of options}\` and stop. $REPLIER.
+   Name a more specific key of your own instead - \`[key=story-size]\` - when more than one decision is open at once.
 $ASK_USER_BLOCK
    A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
-   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: [key=decision] {how it cleared}\` yourself as you resume, always carrying the exact key you opened it under (\`[key=stuck]\` for a blocker).
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+   daemon error, append \`blocked: [key=stuck] {the daemon error}\` and stop; only firstmate manages the daemon.
 
 $INBOX_SECTION
 
