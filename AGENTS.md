@@ -93,6 +93,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <id>/logbook.md    the crewmate's own Done/Next/Open/Decisions thinking file, created by fm-spawn for every ship and scout task, leaders included; never a count for anyone; survives teardown (bin/fm-logbook-lib.sh)
   <id>/sessions.log  a claude task's real harness sessions, one line per session start, appended by the worker SessionStart hook; survives teardown (bin/fm-session-event.sh)
   <id>/trims/        one record per trim of a claude task's context plus an index, written by the worker PostCompact hook; survives teardown (bin/fm-trim-event.sh)
+  Not an exhaustive index: other per-task records exist for particular kinds of task and for a leader's chain, each named in its producing script's header and, for a leader's, in the leader playbook.
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
