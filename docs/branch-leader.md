@@ -55,7 +55,7 @@ The card's `start` is the head at the crewmate's first request, what it carried 
 
 ## On a trim wake
 
-From a crewmate's second automatic trim on, one line lands in the leader's inbox: `trim event: <id> trimmed its context for the Nth time (head XK before it, line 140K) - steer or split the story; summary in data/<id>/trims/N.md` ([`bin/fm-trim-event.sh`](../bin/fm-trim-event.sh)).
+From a crewmate's second automatic trim on, one line lands in the leader's inbox: `trim event: <id> trimmed its context for the Nth time (head XK before it, line 250K) - steer or split the story; summary in data/<id>/trims/N.md` ([`bin/fm-trim-event.sh`](../bin/fm-trim-event.sh)).
 Read that record against the story's acceptance criteria.
 
 - If the summary is on the spec, steer nothing.

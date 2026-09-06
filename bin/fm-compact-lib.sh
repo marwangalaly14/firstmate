@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bin/fm-compact-lib.sh - the 140K line: where a story crewmate's harness trims
+# bin/fm-compact-lib.sh - the 250K line: where a story crewmate's harness trims
 # its own head, derived in one place.
 #
 # Sourced by bin/fm-spawn.sh (which writes fm_compact_window under
@@ -30,13 +30,19 @@
 #               so a big pending batch can record above or below the line while
 #               the last real head (the last assistant usage before the row)
 #               stayed under it; readers measure the head, not preTokens.
-#   The harness's earlier "precomputed" trim (window x 0.8) arms only when no
-#   window is configured or the configured window is at least 200000, so a
-#   story crewmate's 173000 line leaves the 140K line as the only trigger.
+#   The harness's earlier "precomputed" trim arms when no window is configured
+#   or the resolved window (min(model context, configured)) is at least 200000,
+#   and it arms at min(effective - round(effective x 0.2), the line above),
+#   where effective = window - min(model max output, 20000). The old 173000
+#   line sat under that gate, so the mark was the only trigger; 283000 does
+#   not. On a model whose context is at least 283000 the gate passes and the
+#   earlier arm computes 210400, so wherever the harness has that path enabled
+#   a story crewmate trims there rather than at the mark. Re-read from the same
+#   2.1.259 binary on 2026-09-06 when the mark moved to 250000.
 #   autoCompactThreshold is not a settings key; the binary reads no such thing.
 #
-# So the one settings key that puts the trim at the captain's 140K line is
-#   autoCompactWindow = 140000 + 20000 + 13000 = 173000
+# So the one settings key that puts the trim at the captain's 250K line is
+#   autoCompactWindow = 250000 + 20000 + 13000 = 283000
 # for a story crewmate; a leader (bin/fm-spawn.sh --leads) keeps the harness's
 # own window because the epic's whole shape lives in its head. Nothing here
 # stops, warns or throttles a crewmate: the harness trims every session
@@ -52,14 +58,14 @@
 # prints fm_compact_keep_set; the crewmate's own context never carries it.
 #
 # fm_compact_keep_set                   -> the keep-set text, for the summarizer
-# fm_compact_window                     -> 173000, the window for FM_COMPACT_MARK
+# fm_compact_window                     -> 283000, the window for FM_COMPACT_MARK
 # fm_compact_window_for_mark <mark>     -> <mark> + reserved output + margin
 # fm_compact_mark_of_window <window>    -> <window> - reserved output - margin
 # fm_compact_check_window <window>      -> 0 when <window> is exactly the derived
 #                                          window for FM_COMPACT_MARK; otherwise
 #                                          one refusal line on stderr and 1
 
-FM_COMPACT_MARK=140000
+FM_COMPACT_MARK=250000
 FM_COMPACT_RESERVED_OUTPUT=20000
 FM_COMPACT_MARGIN=13000
 # shellcheck disable=SC2034 # The key's one spelling, read by bin/fm-spawn.sh and the tests.

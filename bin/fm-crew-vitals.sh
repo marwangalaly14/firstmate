@@ -4,7 +4,7 @@
 #        FM_HOME=<home> fm-crew-vitals.sh --leader <task-id> [--line|--json] [--outside]
 #        FM_HOME=<home> fm-crew-vitals.sh --all [--line|--json] [--outside]
 #   The card is four lines, designed for a leader with four crewmates, not forty:
-#     <id>  <last status event>  head 91K (start 60K, peak 138K, mark 140K)  trims 1 auto  turns 212
+#     <id>  <last status event>  head 91K (start 60K, peak 138K, mark 250K)  trims 1 auto  turns 212
 #       last call  Bash `bash tests/fm-spawn.test.sh`  40s ago    repeats none
 #       tokens     46K since last commit (82m)   logbook 22m   spend 3.1K/turn
 #       next       "prove the excluded file never lands on the branch"   (logbook)

@@ -173,7 +173,7 @@ test_records_every_trim() {
   assert_contains "$(cat "$rec")" "- transcript: $t" "the record carries the transcript"
   assert_contains "$(cat "$rec")" "- head before the trim: 138K (138000 tokens" \
     "the head is the last request's usage, not the biggest and not a sidechain's"
-  assert_contains "$(cat "$rec")" "- trim line: 140K" "a story crewmate's record names the line"
+  assert_contains "$(cat "$rec")" "- trim line: 250K" "a story crewmate's record names the line"
   assert_contains "$(cat "$rec")" "- automatic trims so far: 1" "the first automatic trim counts one"
   assert_contains "$(cat "$rec")" "- told: nobody (first automatic trim)" "the first trim tells nobody"
   assert_contains "$(cat "$rec")" $'## Summary\n\nKept: the failing test.\nDropped: tool output.' \
@@ -206,7 +206,7 @@ test_second_automatic_trim_rings_the_leader() {
   rec="$home/state/lead-a.inbox/001.msg"
   [ -f "$rec" ] || fail "the second automatic trim must land in the leader's steering inbox at $rec"
   body=$(inbox_body "$rec")
-  [ "$body" = "trim event: c1 trimmed its context for the 2nd time (head 138K before it, line 140K) - steer or split the story; summary in $home/data/c1/trims/2.md" ] \
+  [ "$body" = "trim event: c1 trimmed its context for the 2nd time (head 138K before it, line 250K) - steer or split the story; summary in $home/data/c1/trims/2.md" ] \
     || fail "the leader's line differs:"$'\n'"$body"
   typed=$(cat "$home/send.log" 2>/dev/null)
   assert_contains "$typed" "Firstmate instruction waiting: list $home/state/lead-a.inbox/*.msg" \

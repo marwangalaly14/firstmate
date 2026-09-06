@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# tests/fm-spawn-trim-line.test.sh - the 140K line at spawn time.
+# tests/fm-spawn-trim-line.test.sh - the 250K line at spawn time.
 #
 # A claude story crewmate's worktree .claude/settings.local.json carries the
 # one settings key that moves the harness's automatic trim to the captain's
-# 140K line (bin/fm-compact-lib.sh owns the derivation), and its record says
+# 250K line (bin/fm-compact-lib.sh owns the derivation), and its record says
 # so (trim_mark=, trim_window=). A leader spawned with --leads keeps the
 # harness's own window and is recorded as a leader (leads=1); a crewmate may
 # only be spawned under a task recorded that way. Driven end to end against
